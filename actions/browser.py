@@ -20,7 +20,7 @@
 # DELAY_CDP_MAX_WAIT    : total seconds to wait for browser to open debug port
 # DELAY_CLICK           : seconds to pause after a click (lets page react)
 # ─────────────────────────────────────────────────────────────
-DELAY_AFTER_NAVIGATE = 2.0    # increase to 3-4 for slow/JS-heavy sites
+DELAY_AFTER_NAVIGATE = 3.0    # increased from 2.0 — JS-heavy sites need more time
 DELAY_CDP_READY      = 0.4    # polling interval while waiting for browser
 DELAY_CDP_MAX_WAIT   = 15     # max seconds to wait for debug port
 DELAY_CLICK          = 0.5    # pause after click
@@ -249,15 +249,6 @@ def _port_open(port: int) -> bool:
 
 
 def _kill_browser_process(exe_name: str) -> bool:
-    """
-    Kills all running instances of the browser by executable name.
-    Returns True if any processes were killed.
-
-    This is necessary because Chromium-based browsers are single-instance on
-    Windows — launching a second instance just hands off to the existing one
-    and exits immediately, so --remote-debugging-port never takes effect.
-    Killing first ensures the new launch with the debug port is the only instance.
-    """
     killed = False
     try:
         if _OS == "Windows":
@@ -274,18 +265,13 @@ def _kill_browser_process(exe_name: str) -> bool:
             killed = result.returncode == 0
         if killed:
             print(f"[Browser] 🔴 Closed existing {exe_name} (will reopen with debug port)")
-            time.sleep(1.5)  # let it fully close before relaunching
+            time.sleep(1.5)
     except Exception as e:
         print(f"[Browser] ⚠️ Could not kill {exe_name}: {e}")
     return killed
 
 
 def _launch_browser_with_cdp(exe: str, port: int) -> subprocess.Popen:
-    """
-    Launches the browser with remote debugging enabled.
-    No --user-data-dir flag → browser uses its own default profile directory,
-    same as opening it normally from the taskbar. Real cookies, sessions, logins.
-    """
     is_firefox = "firefox" in exe.lower()
     if is_firefox:
         args = [exe, f"--remote-debugging-port={port}", "--new-instance"]
@@ -303,7 +289,7 @@ def _launch_browser_with_cdp(exe: str, port: int) -> subprocess.Popen:
 
 
 # ─────────────────────────────────────────────────────────────
-# KNOWN SELECTORS — Tier 2
+# KNOWN SELECTORS — Tier 2 (used as hints for JS evaluation)
 # ─────────────────────────────────────────────────────────────
 
 KNOWN_SELECTORS = {
@@ -318,6 +304,8 @@ KNOWN_SELECTORS = {
     "wikipedia_content":     ["#mw-content-text p"],
     "wikipedia_title":       ["#firstHeading"],
     "classroom_assignments": ["[data-assignmentid]", ".k3Jkib", ".UVErfc"],
+    "soundcloud_track":      ["a.soundTitle__title", ".trackItem__trackTitle",
+                              "a[href*='/'][class*='title']"],
 }
 
 
@@ -330,13 +318,21 @@ def construct_url(service: str, **kwargs) -> str:
     q       = kwargs.get("query", "")
     q_enc   = quote_plus(q)
     patterns = {
+        # Search engines
         "google":           f"https://www.google.com/search?q={q_enc}",
         "google_search":    f"https://www.google.com/search?q={q_enc}",
+        "bing":             f"https://www.bing.com/search?q={q_enc}",
+        "duckduckgo":       f"https://duckduckgo.com/?q={q_enc}",
+        # Video / music
         "youtube":          f"https://www.youtube.com/results?search_query={q_enc}",
         "youtube_search":   f"https://www.youtube.com/results?search_query={q_enc}",
         "youtube_by_views": f"https://www.youtube.com/results?search_query={q_enc}&sp=CAM%3D",
         "youtube_views":    f"https://www.youtube.com/results?search_query={q_enc}&sp=CAM%3D",
-        "google_flights":   (
+        "soundcloud":       f"https://soundcloud.com/search?q={q_enc}",
+        "soundcloud_search":f"https://soundcloud.com/search?q={q_enc}",
+        "spotify":          f"https://open.spotify.com/search/{q_enc}",
+        # Travel / booking
+        "google_flights": (
             "https://www.google.com/travel/flights?q=Flights+from+"
             f"{quote_plus(kwargs.get('origin',''))}+to+"
             f"{quote_plus(kwargs.get('destination',''))}+on+"
@@ -347,14 +343,33 @@ def construct_url(service: str, **kwargs) -> str:
             f"{quote_plus(kwargs.get('origin',''))}/"
             f"{quote_plus(kwargs.get('destination',''))}"
         ),
+        "google_hotels": (
+            "https://www.google.com/travel/hotels/"
+            f"?q={q_enc}"
+            + (f"&checkin={quote_plus(kwargs.get('checkin',''))}" if kwargs.get('checkin') else "")
+            + (f"&checkout={quote_plus(kwargs.get('checkout',''))}" if kwargs.get('checkout') else "")
+        ),
+        "booking":          f"https://www.booking.com/searchresults.html?ss={q_enc}",
+        "airbnb":           f"https://www.airbnb.com/s/{q_enc}/homes",
+        "tripadvisor":      f"https://www.tripadvisor.com/Search?q={q_enc}",
+        # Google services
         "gmail":            "https://mail.google.com/",
         "google_drive":     "https://drive.google.com/",
         "google_classroom": "https://classroom.google.com/",
         "classroom_todo":   "https://classroom.google.com/a/not-turned-in/all",
+        "google_calendar":  "https://calendar.google.com/",
+        "google_docs":      "https://docs.google.com/",
+        # Social / messaging
         "whatsapp":         "https://web.whatsapp.com/",
-        "wikipedia":        f"https://en.wikipedia.org/wiki/{q_enc}",
-        "amazon":           f"https://www.amazon.com/s?k={q_enc}",
+        "twitter":          f"https://twitter.com/search?q={q_enc}",
+        "x":                f"https://x.com/search?q={q_enc}",
+        "instagram":        f"https://www.instagram.com/explore/tags/{q_enc}/",
         "reddit":           f"https://www.reddit.com/search/?q={q_enc}",
+        # Shopping
+        "amazon":           f"https://www.amazon.com/s?k={q_enc}",
+        "ebay":             f"https://www.ebay.com/sch/i.html?_nkw={q_enc}",
+        # Reference
+        "wikipedia":        f"https://en.wikipedia.org/wiki/{q_enc}",
         "github":           f"https://github.com/search?q={q_enc}",
         "weather":          f"https://www.google.com/search?q=weather+{q_enc}",
     }
@@ -372,7 +387,7 @@ class _BrowserThread:
         self._thread:    threading.Thread | None          = None
         self._ready:     threading.Event                  = threading.Event()
         self._playwright = None
-        self._browser    = None   # CDP browser object
+        self._browser    = None
         self._context    = None
         self._page       = None
         self._proc:      subprocess.Popen | None          = None
@@ -408,20 +423,8 @@ class _BrowserThread:
         return self._page
 
     async def _launch(self):
-        """
-        Connect to the user's real browser via CDP.
-
-        Step 1: Already running on the debug port? Connect immediately.
-        Step 2: Running WITHOUT the debug port (normal launch from taskbar)?
-                Kill it, relaunch with --remote-debugging-port, then connect.
-                This is required because Chromium is single-instance — a second
-                launch just hands off to the existing process and exits, so the
-                debug port never opens.
-        Step 3: Fallback to Playwright's built-in Chromium if no browser found.
-        """
         port = CDP_PORT
 
-        # ── Step 1: already running with debug port? ──────────────
         if _port_open(port):
             try:
                 self._browser = await self._playwright.chromium.connect_over_cdp(
@@ -436,18 +439,14 @@ class _BrowserThread:
             except Exception as e:
                 print(f"[Browser] ⚠️ Existing CDP connection failed: {e}")
 
-        # ── Step 2: launch with debug port ────────────────────────
         cfg = _resolve_browser()
         if cfg and cfg.get("exe"):
             exe      = cfg["exe"]
-            exe_name = Path(exe).name  # e.g. "brave.exe"
+            exe_name = Path(exe).name
 
-            # Kill any existing instance so our debug-port launch becomes the only one
             _kill_browser_process(exe_name)
-
             self._proc = _launch_browser_with_cdp(exe, port)
 
-            # Wait for the debug port to open
             deadline = time.time() + DELAY_CDP_MAX_WAIT
             while time.time() < deadline:
                 await asyncio.sleep(DELAY_CDP_READY)
@@ -471,7 +470,6 @@ class _BrowserThread:
                 except Exception as e:
                     print(f"[Browser] ⚠️ CDP connect after launch failed: {e}")
 
-        # ── Step 3: fallback ──────────────────────────────────────
         print("[Browser] ⚠️ Falling back to built-in Chromium (no real profile)")
         b             = await self._playwright.chromium.launch(
             headless=False, args=["--start-maximized"]
@@ -538,7 +536,10 @@ class _BrowserThread:
             self._page = pages[-1] if pages else None
         return "Tab closed."
 
-    # ── Tier 2: HTML parsing ─────────────────────────────────
+    # ── Tier 2: JS DOM evaluation (replaces BeautifulSoup) ───
+    # Works on React / Vue / SPA sites — reads the LIVE rendered DOM
+    # via JavaScript, not the static HTML source. This is why SoundCloud,
+    # YouTube search results, and other JS-heavy sites now work correctly.
 
     async def _fetch_html(self) -> str:
         try:
@@ -548,12 +549,14 @@ class _BrowserThread:
 
     async def _parse_html(self, selector: str = "", known_key: str = "",
                            attribute: str = "href", limit: int = 5) -> str:
-        if not _BS4:
-            return "BeautifulSoup not installed. Run: pip install beautifulsoup4"
-        html = await self._fetch_html()
-        if html.startswith("Could not"):
-            return html
-        soup      = BeautifulSoup(html, "html.parser")
+        """
+        Queries the LIVE rendered DOM via JavaScript first.
+        Works on any site — SPA, React, server-rendered, anything.
+        Falls back to BeautifulSoup on the raw HTML only if JS eval fails.
+        """
+        page = await self._get_page()
+
+        # Build list of selectors to try
         selectors = []
         if known_key and known_key in KNOWN_SELECTORS:
             selectors.extend(KNOWN_SELECTORS[known_key])
@@ -561,28 +564,136 @@ class _BrowserThread:
             selectors.insert(0, selector)
         if not selectors:
             return json.dumps({"error": "No selector specified."})
-        results = []
+
+        base_url = page.url
+
+        # ── Primary path: JS page.evaluate() on the live DOM ──
         for sel in selectors:
-            for el in soup.select(sel, limit=limit * 2)[:limit]:
-                if attribute == "text":
-                    val = el.get_text(strip=True)
-                elif attribute == "href":
-                    val = el.get("href", "")
-                    if val and not val.startswith("http"):
-                        try:
-                            val = urljoin((await self._get_page()).url, val)
-                        except Exception:
-                            pass
-                else:
-                    val = el.get(attribute, el.get_text(strip=True))
-                if val:
-                    results.append({"value": val, "text": el.get_text(strip=True)[:100]})
-            if results:
-                break
-        if not results:
-            return json.dumps({"found": [], "count": 0,
-                               "note": f"No elements matched: {selectors}"})
-        return json.dumps({"found": results, "count": len(results)}, ensure_ascii=False)
+            try:
+                # Escape selector for JS string — single quotes need escaping
+                sel_escaped = sel.replace("\\", "\\\\").replace("'", "\\'")
+                attr_escaped = attribute.replace("\\", "\\\\").replace("'", "\\'")
+
+                raw = await page.evaluate(f"""
+                    () => {{
+                        const els = Array.from(
+                            document.querySelectorAll('{sel_escaped}')
+                        ).slice(0, {limit * 3});
+
+                        return els.map(el => {{
+                            let val = '';
+                            if ('{attr_escaped}' === 'href') {{
+                                val = el.href || el.getAttribute('href') || '';
+                            }} else if ('{attr_escaped}' === 'text') {{
+                                val = el.textContent.trim();
+                            }} else if ('{attr_escaped}' === 'src') {{
+                                val = el.src || el.getAttribute('src') || '';
+                            }} else {{
+                                val = el.getAttribute('{attr_escaped}') ||
+                                      el.textContent.trim();
+                            }}
+                            return {{
+                                value: val,
+                                text:  el.textContent.trim()
+                                           .replace(/\\s+/g, ' ')
+                                           .substring(0, 120)
+                            }};
+                        }}).filter(r => r.value && r.value.length > 0);
+                    }}
+                """)
+
+                if raw:
+                    # Resolve relative URLs to absolute
+                    results = []
+                    seen    = set()
+                    for r in raw:
+                        v = r.get("value", "")
+                        if v and not v.startswith("http") and not v.startswith("//"):
+                            v = urljoin(base_url, v)
+                            r["value"] = v
+                        # Skip duplicates and javascript: / data: URIs
+                        if v in seen or v.startswith("javascript:") or v.startswith("data:"):
+                            continue
+                        seen.add(v)
+                        results.append(r)
+                        if len(results) >= limit:
+                            break
+
+                    if results:
+                        print(f"[Browser] ✅ JS DOM found {len(results)} elements with '{sel}'")
+                        return json.dumps(
+                            {"found": results, "count": len(results)},
+                            ensure_ascii=False
+                        )
+
+            except Exception as e:
+                print(f"[Browser] ⚠️ JS eval failed for '{sel}': {e}")
+                continue
+
+        # ── Fallback: BeautifulSoup on raw HTML ──────────────
+        # Only reached if JS eval found nothing (e.g. selector is wrong).
+        # For JS-rendered sites this will also return nothing, which means
+        # the selector itself needs updating — not a code bug.
+        if _BS4:
+            try:
+                html = await self._fetch_html()
+                if not html.startswith("Could not"):
+                    soup = BeautifulSoup(html, "html.parser")
+                    results = []
+                    for sel in selectors:
+                        for el in soup.select(sel, limit=limit * 2)[:limit]:
+                            if attribute == "text":
+                                val = el.get_text(strip=True)
+                            elif attribute == "href":
+                                val = el.get("href", "")
+                                if val and not val.startswith("http"):
+                                    val = urljoin(base_url, val)
+                            else:
+                                val = el.get(attribute, el.get_text(strip=True))
+                            if val:
+                                results.append({
+                                    "value": val,
+                                    "text": el.get_text(strip=True)[:100]
+                                })
+                        if results:
+                            break
+                    if results:
+                        print(f"[Browser] ✅ BS4 fallback found {len(results)} elements")
+                        return json.dumps(
+                            {"found": results, "count": len(results)},
+                            ensure_ascii=False
+                        )
+            except Exception as e:
+                print(f"[Browser] ⚠️ BS4 fallback failed: {e}")
+
+        return json.dumps({
+            "found":  [],
+            "count":  0,
+            "note":   (
+                f"No elements matched: {selectors[:3]}. "
+                f"Page may need more load time (try wait_for_content first) "
+                f"or the selector needs updating for this site."
+            )
+        })
+
+    # ── Tier 2.5: Wait for JS to finish rendering ────────────
+
+    async def _wait_for_content(self, timeout_ms: int = 5000) -> str:
+        """
+        Waits for the page network to go idle — i.e. JS has finished
+        making API calls and inserting content into the DOM.
+        Call this before parse_html on JS-heavy sites like Google Classroom,
+        SoundCloud, YouTube when you need DOM content to be ready.
+        """
+        page = await self._get_page()
+        try:
+            await page.wait_for_load_state("networkidle", timeout=timeout_ms)
+            await asyncio.sleep(0.5)  # small buffer after idle
+            return "Page fully loaded and network idle."
+        except Exception:
+            # Timeout is fine — partial load is better than nothing
+            await asyncio.sleep(1.0)
+            return "Wait complete (network did not fully idle — page may be partially loaded)."
 
     # ── Tier 3: Page text ────────────────────────────────────
 
@@ -726,26 +837,29 @@ def browser(
         DELAY_CLICK           — increase if clicks aren't registering
 
     actions:
-        go_to        : Navigate to URL
-        construct_url: Build service URL (google, youtube, youtube_by_views,
-                       google_flights, google_maps, gmail, google_classroom,
-                       classroom_todo, whatsapp, wikipedia, amazon, weather)
-        fetch_html   : Get raw HTML source (Tier 2)
-        parse_html   : Parse HTML for elements — preferred for finding links
-                       selector, known_key, attribute (href/text/src), limit
-        get_text     : All visible page text (Tier 3)
-        vision_read  : Screenshot + Gemini question (Tier 4) — costs API call
-                       question: specific answerable question
-        click        : Click by selector, text, or description
-        type         : Type into field (selector, text, clear_first)
-        scroll       : Scroll direction up|down, amount (pixels)
-        press        : Press key (Enter, Escape, Tab, etc.)
-        get_url      : Get current page URL
-        back         : Navigate back
-        reload       : Reload page
-        new_tab      : Open new tab (optional url)
-        close_tab    : Close current tab
-        close        : Disconnect from browser
+        go_to            : Navigate to URL
+        construct_url    : Build service URL (google, youtube, soundcloud, booking,
+                           google_flights, google_maps, gmail, google_classroom,
+                           classroom_todo, whatsapp, wikipedia, amazon, weather, ...)
+        fetch_html       : Get raw HTML source
+        parse_html       : Query the LIVE rendered DOM via JavaScript — works on
+                           any site including SPAs. Falls back to BeautifulSoup.
+                           selector, known_key, attribute (href/text/src), limit
+        wait_for_content : Wait for JS to finish loading (call before parse_html
+                           on Google Classroom, SoundCloud, YouTube, etc.)
+        get_text         : All visible page text (Tier 3)
+        vision_read      : Screenshot + Gemini question (Tier 4) — costs API call
+                           question: specific answerable question
+        click            : Click by selector, text, or description
+        type             : Type into field (selector, text, clear_first)
+        scroll           : Scroll direction up|down, amount (pixels)
+        press            : Press key (Enter, Escape, Tab, etc.)
+        get_url          : Get current page URL
+        back             : Navigate back
+        reload           : Reload page
+        new_tab          : Open new tab (optional url)
+        close_tab        : Close current tab
+        close            : Disconnect from browser
     """
     _ensure_started()
 
@@ -775,6 +889,11 @@ def browser(
                 attribute = parameters.get("attribute", "href"),
                 limit     = int(parameters.get("limit", 5))
             ), timeout=20)
+
+        elif action == "wait_for_content":
+            result = _bt.run(_bt._wait_for_content(
+                timeout_ms=int(parameters.get("timeout_ms", 5000))
+            ), timeout=10)
 
         elif action == "get_text":
             result = _bt.run(_bt._get_text(

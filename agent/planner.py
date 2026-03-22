@@ -41,7 +41,8 @@ Does it need multiple steps where one result feeds the next? → create a plan.
 STEP C — Choose the right tier for each step.
 Tier 0: No reading. OS controls, terminal tasks, launching apps → instant, no browser.
 Tier 1: URL construction. Build the URL and navigate directly. Zero extra calls.
-Tier 2: HTML parsing. fetch_html + parse_html. PREFERRED for finding links. Exact and free.
+Tier 2: DOM parsing via parse_html. Reads the LIVE rendered DOM using JavaScript —
+        works on React/SPA sites like YouTube, SoundCloud, Gmail. PREFERRED for finding links.
 Tier 3: get_text. All visible text. For reading content you will speak back.
 Tier 4: vision_read. Screenshot + Gemini question. Costs one API call. Use deliberately.
 Tier 5: Vision loop. Multiple vision+computer iterations. Only for complex UI.
@@ -53,22 +54,35 @@ ROUTING RULES:
 - Conditional steps: add "condition" field: "only if step N found X"
   If condition is false, executor skips that step and speaks a natural explanation.
 
+JS-HEAVY SITES RULE — CRITICAL:
+Always insert a wait_for_content step between go_to and parse_html/get_text when
+navigating to any of these sites:
+  classroom.google.com, soundcloud.com, youtube.com, mail.google.com,
+  drive.google.com, docs.google.com, notion.so, figma.com, canva.com,
+  open.spotify.com, or ANY site that is a known React/SPA application.
+These sites load content via JavaScript AFTER the initial page load. Without
+wait_for_content, parse_html and get_text will see an empty/skeleton page.
+The pattern is always: go_to → wait_for_content → parse_html/get_text.
+
 ═══════════════════════════════════════════════════════
 AVAILABLE TOOLS AND THEIR PARAMETERS
 ═══════════════════════════════════════════════════════
 
 browser
-  action: go_to | construct_url | fetch_html | parse_html | get_text |
-          vision_read | click | type | scroll | press | get_url | back |
-          reload | new_tab | close_tab | close
+  action: go_to | construct_url | fetch_html | parse_html | wait_for_content |
+          get_text | vision_read | click | type | scroll | press | get_url |
+          back | reload | new_tab | close_tab | close
   url: string (for go_to)
   service: string (for construct_url: google, youtube, youtube_by_views,
-           google_flights, google_maps, gmail, google_classroom, classroom_todo,
-           whatsapp, wikipedia, amazon, weather)
-  query, origin, destination, date: string (service-specific for construct_url)
+           soundcloud, spotify, google_flights, google_maps, google_hotels,
+           gmail, google_classroom, classroom_todo, google_calendar,
+           whatsapp, wikipedia, amazon, booking, airbnb, tripadvisor,
+           reddit, github, twitter, weather)
+  query, origin, destination, date, checkin, checkout: string (for construct_url)
   selector: CSS selector (for parse_html)
   known_key: string (for parse_html: youtube_video_link, google_first_result,
-             google_weather_temp, wikipedia_content)
+             google_weather_temp, wikipedia_content, soundcloud_track,
+             classroom_assignments)
   attribute: "href" (default) | "text" | "src" (for parse_html)
   question: string (for vision_read — specific, answerable question)
   text: string (for click/type)
@@ -76,6 +90,12 @@ browser
   direction: "up" | "down" (for scroll)
   key: string (for press: Enter, Escape, Tab)
   limit: int (for parse_html, default 5)
+  timeout_ms: int (for wait_for_content, default 5000 — use 6000-7000 for slow sites)
+
+  IMPORTANT — wait_for_content:
+    Waits for the page JavaScript to finish loading data into the DOM.
+    Use before parse_html or get_text on any JS-heavy/SPA site.
+    It is not critical — if it times out, execution continues anyway.
 
 vision
   text: string (required — specific question about what to look for)
@@ -139,8 +159,8 @@ Reasoning: OS control. Tier 0. One call.
 ---
 
 Goal: "What's the weather in Istanbul?"
-Reasoning: Tier 1 construct weather URL. Tier 2 parse HTML for temperature.
-Tier 4 fallback if parse returns nothing (JS-rendered).
+Reasoning: Tier 1 construct weather URL. Google weather is server-rendered so
+parse_html works here without wait_for_content. Tier 4 fallback if parse returns nothing.
 {
   "goal": "Weather in Istanbul",
   "steps": [
@@ -160,7 +180,8 @@ Tier 4 fallback if parse returns nothing (JS-rendered).
 ---
 
 Goal: "Play lo-fi music on YouTube"
-Reasoning: Tier 1 YouTube search URL. Tier 2 parse HTML for first video link.
+Reasoning: Tier 1 YouTube search URL. YouTube is a React SPA — must wait_for_content
+before parse_html or the DOM is empty. Tier 2 JS DOM parse for first video link.
 Tier 1 navigate to that video. No coordinate clicking.
 {
   "goal": "Play lo-fi music on YouTube",
@@ -168,11 +189,38 @@ Tier 1 navigate to that video. No coordinate clicking.
     {"step": 1, "tool": "browser", "description": "Search YouTube for lo-fi music",
      "parameters": {"action": "go_to", "url": "https://www.youtube.com/results?search_query=lo-fi+music"},
      "critical": true},
-    {"step": 2, "tool": "browser", "description": "Parse first video link from results",
+    {"step": 2, "tool": "browser", "description": "Wait for YouTube React app to render results",
+     "parameters": {"action": "wait_for_content", "timeout_ms": 5000},
+     "critical": false},
+    {"step": 3, "tool": "browser", "description": "Parse first video link from live DOM",
      "parameters": {"action": "parse_html", "known_key": "youtube_video_link",
                     "attribute": "href", "limit": 1},
      "critical": true},
-    {"step": 3, "tool": "browser", "description": "Navigate to the video",
+    {"step": 4, "tool": "browser", "description": "Navigate to the video to play it",
+     "parameters": {"action": "go_to", "url": ""},
+     "critical": true}
+  ]
+}
+
+---
+
+Goal: "Play the flash theme on SoundCloud"
+Reasoning: Tier 1 SoundCloud search URL. SoundCloud is a React SPA — must
+wait_for_content before parse_html. Tier 2 JS DOM parse for first track link.
+{
+  "goal": "Play the flash theme on SoundCloud",
+  "steps": [
+    {"step": 1, "tool": "browser", "description": "Search SoundCloud for the flash theme",
+     "parameters": {"action": "go_to", "url": "https://soundcloud.com/search?q=the+flash+theme"},
+     "critical": true},
+    {"step": 2, "tool": "browser", "description": "Wait for SoundCloud React app to load tracks",
+     "parameters": {"action": "wait_for_content", "timeout_ms": 6000},
+     "critical": false},
+    {"step": 3, "tool": "browser", "description": "Parse first track link from live DOM",
+     "parameters": {"action": "parse_html", "known_key": "soundcloud_track",
+                    "attribute": "href", "limit": 1},
+     "critical": true},
+    {"step": 4, "tool": "browser", "description": "Navigate to the track to play it",
      "parameters": {"action": "go_to", "url": ""},
      "critical": true}
   ]
@@ -197,14 +245,17 @@ Reasoning: Tier 0. yt-dlp. Single terminal call. No browser needed.
 ---
 
 Goal: "Check Gmail for urgent emails"
-Reasoning: Tier 1 Gmail URL. Unread state is visual (bold), not in raw HTML.
-Tier 4 vision_read with specific question.
+Reasoning: Tier 1 Gmail URL. Gmail is a React SPA — wait_for_content before reading.
+Unread state is visual (bold text) so use vision_read not get_text.
 {
   "goal": "Check Gmail for urgent emails",
   "steps": [
     {"step": 1, "tool": "browser", "description": "Open Gmail",
      "parameters": {"action": "go_to", "url": "https://mail.google.com/"}, "critical": true},
-    {"step": 2, "tool": "browser", "description": "Read inbox visually for unread emails",
+    {"step": 2, "tool": "browser", "description": "Wait for Gmail to load inbox",
+     "parameters": {"action": "wait_for_content", "timeout_ms": 6000},
+     "critical": false},
+    {"step": 3, "tool": "browser", "description": "Read inbox visually for unread emails",
      "parameters": {"action": "vision_read",
                     "question": "List all unread emails showing sender name and subject. Mark each UNREAD or READ."},
      "critical": true}
@@ -214,15 +265,22 @@ Tier 4 vision_read with specific question.
 ---
 
 Goal: "What assignments do I have due tomorrow on Google Classroom?"
-Reasoning: Go to To-do section specifically (not homepage — incomplete).
-Tier 3 get_text to read all assignments. Filter for tomorrow in synthesis.
+Reasoning: Go to To-do section specifically — not homepage. Google Classroom is a React
+SPA that loads assignment data via background API calls after page load.
+Must wait_for_content or get_text will see an empty skeleton. Tier 3 get_text to
+read all assignments. Filter for tomorrow in synthesis.
 {
   "goal": "Assignments due tomorrow on Google Classroom",
   "steps": [
     {"step": 1, "tool": "browser", "description": "Open Google Classroom To-do page",
-     "parameters": {"action": "go_to", "url": "https://classroom.google.com/a/not-turned-in/all"},
+     "parameters": {"action": "go_to",
+                    "url": "https://classroom.google.com/a/not-turned-in/all"},
      "critical": true},
-    {"step": 2, "tool": "browser", "description": "Read all assignments and due dates",
+    {"step": 2, "tool": "browser",
+     "description": "Wait for Classroom to finish loading assignments via API",
+     "parameters": {"action": "wait_for_content", "timeout_ms": 7000},
+     "critical": false},
+    {"step": 3, "tool": "browser", "description": "Read all assignments and due dates",
      "parameters": {"action": "get_text"}, "critical": true}
   ]
 }
@@ -230,24 +288,27 @@ Tier 3 get_text to read all assignments. Filter for tomorrow in synthesis.
 ---
 
 Goal: "Check Classroom and submit Mr Omar's assignment if there is one"
-Reasoning: Tier 1 navigate. Tier 4 vision_read to check if assignment exists (conditional).
-If found: interact. If not: skip and speak natural message.
+Reasoning: Tier 1 navigate. wait_for_content. Tier 4 vision_read to check if
+assignment exists (conditional). If found: interact. If not: skip and speak.
 {
   "goal": "Submit Mr Omar assignment if it exists",
   "steps": [
     {"step": 1, "tool": "browser", "description": "Open Google Classroom",
      "parameters": {"action": "go_to", "url": "https://classroom.google.com/"}, "critical": true},
-    {"step": 2, "tool": "browser", "description": "Check if Mr Omar has a pending assignment",
+    {"step": 2, "tool": "browser", "description": "Wait for Classroom to load",
+     "parameters": {"action": "wait_for_content", "timeout_ms": 7000},
+     "critical": false},
+    {"step": 3, "tool": "browser", "description": "Check if Mr Omar has a pending assignment",
      "parameters": {"action": "vision_read",
                     "question": "Is there a pending assignment posted by Mr Omar or from Mr Omar's class? Say NOT FOUND if none."},
      "critical": true},
-    {"step": 3, "tool": "browser", "description": "Click Mr Omar's assignment",
+    {"step": 4, "tool": "browser", "description": "Click Mr Omar's assignment",
      "parameters": {"action": "click", "description": "Mr Omar assignment"},
-     "condition": "only if step 2 found an assignment from Mr Omar",
+     "condition": "only if step 3 found an assignment from Mr Omar",
      "critical": false},
-    {"step": 4, "tool": "browser", "description": "Click submit button",
+    {"step": 5, "tool": "browser", "description": "Click submit button",
      "parameters": {"action": "click", "description": "Turn in or Submit button"},
-     "condition": "only if step 2 found an assignment from Mr Omar",
+     "condition": "only if step 3 found an assignment from Mr Omar",
      "critical": false}
   ]
 }
@@ -255,28 +316,31 @@ If found: interact. If not: skip and speak natural message.
 ---
 
 Goal: "Send Ahmed a WhatsApp message: I'll be 10 minutes late"
-Reasoning: Tier 1 WhatsApp Web (already logged in). Tier 4 vision_read to find contact.
-Tier 5 interaction: click chat, type, send.
+Reasoning: Tier 1 WhatsApp Web (already logged in). WhatsApp Web is a React SPA —
+wait_for_content. Tier 4 vision_read to find contact. Tier 5 interaction.
 {
   "goal": "Send WhatsApp message to Ahmed",
   "steps": [
     {"step": 1, "tool": "browser", "description": "Open WhatsApp Web",
      "parameters": {"action": "go_to", "url": "https://web.whatsapp.com/"}, "critical": true},
-    {"step": 2, "tool": "browser", "description": "Find Ahmed in contacts",
+    {"step": 2, "tool": "browser", "description": "Wait for WhatsApp to load chats",
+     "parameters": {"action": "wait_for_content", "timeout_ms": 8000},
+     "critical": false},
+    {"step": 3, "tool": "browser", "description": "Find Ahmed in contacts",
      "parameters": {"action": "vision_read",
                     "question": "Find Ahmed in the contacts or recent chats list. Describe his location on screen."},
      "critical": true},
-    {"step": 3, "tool": "computer", "description": "Click Ahmed's chat",
+    {"step": 4, "tool": "computer", "description": "Click Ahmed's chat",
      "parameters": {"action": "screen_click", "description": "Ahmed chat in WhatsApp"},
-     "condition": "only if step 2 found Ahmed",
+     "condition": "only if step 3 found Ahmed",
      "critical": false},
-    {"step": 4, "tool": "computer", "description": "Type the message",
+    {"step": 5, "tool": "computer", "description": "Type the message",
      "parameters": {"action": "type", "text": "I'll be 10 minutes late"},
-     "condition": "only if step 2 found Ahmed",
+     "condition": "only if step 3 found Ahmed",
      "critical": false},
-    {"step": 5, "tool": "computer", "description": "Press Enter to send",
+    {"step": 6, "tool": "computer", "description": "Press Enter to send",
      "parameters": {"action": "press", "key": "Return"},
-     "condition": "only if step 2 found Ahmed",
+     "condition": "only if step 3 found Ahmed",
      "critical": false}
   ]
 }
@@ -284,7 +348,8 @@ Tier 5 interaction: click chat, type, send.
 ---
 
 Goal: "Find cheap flights from Istanbul to London on Friday March 27"
-Reasoning: Tier 1 Google Flights URL with date. Tier 3 get_text for prices.
+Reasoning: Tier 1 Google Flights URL with date. Google Flights is JS-rendered —
+wait_for_content then get_text for prices.
 {
   "goal": "Flights Istanbul to London March 27",
   "steps": [
@@ -292,7 +357,10 @@ Reasoning: Tier 1 Google Flights URL with date. Tier 3 get_text for prices.
      "parameters": {"action": "go_to",
                     "url": "https://www.google.com/travel/flights?q=Flights+from+Istanbul+to+London+on+2026-03-27"},
      "critical": true},
-    {"step": 2, "tool": "browser", "description": "Read flight prices and options",
+    {"step": 2, "tool": "browser", "description": "Wait for flight results to load",
+     "parameters": {"action": "wait_for_content", "timeout_ms": 7000},
+     "critical": false},
+    {"step": 3, "tool": "browser", "description": "Read flight prices and options",
      "parameters": {"action": "get_text"}, "critical": true}
   ]
 }
@@ -354,8 +422,8 @@ Reasoning: First verify file exists. Then convert. Verify output. Tier 0 termina
 ---
 
 Goal: "Find the most viewed Interstellar edit on YouTube and download it"
-Reasoning: Sort by views (not default relevance). Parse HTML for first result.
-Ask user about save location. yt-dlp download. Fallback if it fails.
+Reasoning: Sort by views (not default relevance). wait_for_content — YouTube is React.
+Parse HTML for first result. yt-dlp download.
 {
   "goal": "Download most viewed Interstellar edit from YouTube",
   "steps": [
@@ -363,11 +431,14 @@ Ask user about save location. yt-dlp download. Fallback if it fails.
      "parameters": {"action": "go_to",
                     "url": "https://www.youtube.com/results?search_query=Interstellar+edit&sp=CAM%3D"},
      "critical": true},
-    {"step": 2, "tool": "browser", "description": "Get first video URL and title from sorted results",
+    {"step": 2, "tool": "browser", "description": "Wait for YouTube to render sorted results",
+     "parameters": {"action": "wait_for_content", "timeout_ms": 5000},
+     "critical": false},
+    {"step": 3, "tool": "browser", "description": "Get first video URL from sorted results",
      "parameters": {"action": "parse_html", "known_key": "youtube_video_link",
                     "attribute": "href", "limit": 1},
      "critical": true},
-    {"step": 3, "tool": "terminal", "description": "Download video with yt-dlp to Desktop",
+    {"step": 4, "tool": "terminal", "description": "Download video with yt-dlp to Desktop",
      "parameters": {"task": "download youtube video",
                     "destination": "~/Desktop/%(title)s.%(ext)s",
                     "visible": true},
@@ -386,7 +457,29 @@ Reasoning: Tier 1 Google Maps URL. Tier 3 get_text for duration.
      "parameters": {"action": "go_to",
                     "url": "https://www.google.com/maps/dir/Kad%C4%B1k%C3%B6y/Be%C5%9Fikta%C5%9F"},
      "critical": true},
-    {"step": 2, "tool": "browser", "description": "Read travel duration from page",
+    {"step": 2, "tool": "browser", "description": "Wait for Maps to load route data",
+     "parameters": {"action": "wait_for_content", "timeout_ms": 5000},
+     "critical": false},
+    {"step": 3, "tool": "browser", "description": "Read travel duration from page",
+     "parameters": {"action": "get_text"}, "critical": true}
+  ]
+}
+
+---
+
+Goal: "Find the cheapest hotel in Amsterdam for next weekend"
+Reasoning: Tier 1 Google Hotels URL. JS-rendered — wait_for_content. Tier 3 get_text.
+{
+  "goal": "Find cheapest hotel in Amsterdam next weekend",
+  "steps": [
+    {"step": 1, "tool": "browser", "description": "Search Google Hotels for Amsterdam",
+     "parameters": {"action": "go_to",
+                    "url": "https://www.google.com/travel/hotels/?q=hotels+in+Amsterdam"},
+     "critical": true},
+    {"step": 2, "tool": "browser", "description": "Wait for hotel results to load",
+     "parameters": {"action": "wait_for_content", "timeout_ms": 7000},
+     "critical": false},
+    {"step": 3, "tool": "browser", "description": "Read hotel names and prices",
      "parameters": {"action": "get_text"}, "critical": true}
   ]
 }
@@ -418,6 +511,7 @@ RULES:
 - Steps that depend on another step's result: the executor will inject context automatically.
 - Do NOT write the previous step's result into parameters literally — leave url "" or content ""
   and the executor will fill it from the prior result.
+- For ANY JS-heavy/SPA site: always insert wait_for_content between go_to and parse_html/get_text.
 """
 
 
@@ -478,6 +572,56 @@ def _fallback_plan_from_keywords(goal: str) -> dict:
                 "parameters": {"description": goal},
                 "critical": True
             }]
+        }
+
+    # SoundCloud fallback
+    if "soundcloud" in g:
+        query = re.sub(r"play|on soundcloud|soundcloud", "", g).strip()
+        return {
+            "goal": goal,
+            "steps": [
+                {"step": 1, "tool": "browser", "description": "Search SoundCloud",
+                 "parameters": {"action": "go_to",
+                                "url": f"https://soundcloud.com/search?q={quote_plus(query)}"},
+                 "critical": True},
+                {"step": 2, "tool": "browser",
+                 "description": "Wait for SoundCloud to load",
+                 "parameters": {"action": "wait_for_content", "timeout_ms": 6000},
+                 "critical": False},
+                {"step": 3, "tool": "browser",
+                 "description": "Parse first track link",
+                 "parameters": {"action": "parse_html", "known_key": "soundcloud_track",
+                                "attribute": "href", "limit": 1},
+                 "critical": True},
+                {"step": 4, "tool": "browser", "description": "Navigate to track",
+                 "parameters": {"action": "go_to", "url": ""},
+                 "critical": True},
+            ]
+        }
+
+    # YouTube fallback
+    if "youtube" in g or "play" in g:
+        query = re.sub(r"play|on youtube|youtube", "", g).strip()
+        return {
+            "goal": goal,
+            "steps": [
+                {"step": 1, "tool": "browser", "description": "Search YouTube",
+                 "parameters": {"action": "go_to",
+                                "url": f"https://www.youtube.com/results?search_query={quote_plus(query)}"},
+                 "critical": True},
+                {"step": 2, "tool": "browser",
+                 "description": "Wait for YouTube to render",
+                 "parameters": {"action": "wait_for_content", "timeout_ms": 5000},
+                 "critical": False},
+                {"step": 3, "tool": "browser",
+                 "description": "Parse first video link",
+                 "parameters": {"action": "parse_html", "known_key": "youtube_video_link",
+                                "attribute": "href", "limit": 1},
+                 "critical": True},
+                {"step": 4, "tool": "browser", "description": "Navigate to video",
+                 "parameters": {"action": "go_to", "url": ""},
+                 "critical": True},
+            ]
         }
 
     # Generic browser search
@@ -588,7 +732,8 @@ def replan(goal: str, completed_steps: list, failed_step: dict, error: str) -> d
         f"Failed step: [{failed_step.get('tool')}] {failed_step.get('description')}\n"
         f"Error: {error[:300]}\n\n"
         f"Create a REVISED plan for the REMAINING work only. Do not repeat completed steps. "
-        f"Use only browser, vision, computer, terminal, os_control tools."
+        f"Use only browser, vision, computer, terminal, os_control tools. "
+        f"Remember: always insert wait_for_content before parse_html/get_text on JS-heavy sites."
     )
 
     last_error = None

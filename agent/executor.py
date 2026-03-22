@@ -4,6 +4,7 @@
 # Runs a plan step by step with:
 #   - Context enrichment: prior results automatically injected into upcoming steps
 #   - Condition evaluation: conditional steps skipped with natural spoken explanation
+#   - Step verification: after key browser steps, screenshots to confirm success
 #   - Error recovery: retry, skip, replan via error_handler
 #   - Natural summary: synthesizes real data found, not just "done N steps"
 
@@ -73,7 +74,6 @@ def _call_tool(tool: str, parameters: dict, speak: Callable | None) -> str:
         screen_process(parameters=parameters, player=None)
         return "Screen captured and analyzed."
 
-    # Legacy compatibility — kept for error handler's generate_fix fallback
     elif tool == "file_controller":
         try:
             from actions.file_controller import file_controller
@@ -108,45 +108,79 @@ def _call_tool(tool: str, parameters: dict, speak: Callable | None) -> str:
 # CONTEXT ENRICHMENT
 # ─────────────────────────────────────────────────────────────
 
+# Strings that indicate Gemini produced a placeholder URL rather than a real one.
+# These are rejected during URL extraction so they never get navigated to.
+_PLACEHOLDER_SIGNALS = [
+    "[username]", "[track-slug]", "[slug]", "[id]", "[user]",
+    "[artist]", "[song]", "[video-id]", "[example]", "[name]",
+    "example.com", "your-", "placeholder", "INSERT_", "<username>",
+    "<track>", "<id>", "{username}", "{track}", "{id}",
+]
+
+
 def _extract_url_from_result(result: str) -> str | None:
-    """Extract first URL from a result string (Tier 2 parse_html output or other)."""
-    # parse_html returns JSON: {"found": [{"value": "https://..."}]}
+    """
+    Extract first real URL from a result string.
+    Rejects placeholder/template URLs that Gemini sometimes produces
+    when vision_read describes a URL structure rather than reading
+    an actual href value.
+    """
+    # parse_html / JS eval returns JSON: {"found": [{"value": "https://..."}]}
     try:
-        data = json.loads(result)
+        data  = json.loads(result)
         found = data.get("found", [])
-        if found and found[0].get("value", "").startswith("http"):
-            return found[0]["value"]
+        for item in found:
+            url = item.get("value", "")
+            if not url.startswith("http"):
+                continue
+            if any(sig in url for sig in _PLACEHOLDER_SIGNALS):
+                print(f"[Executor] ⚠️ Rejected placeholder URL: {url[:80]}")
+                continue
+            # Reject URLs with literal brackets (template syntax)
+            if "[" in url or "{" in url:
+                continue
+            return url
     except Exception:
         pass
+
     # Plain URL in text
-    url_m = re.search(r"https?://[^\s\"'<>]+", result)
-    if url_m:
-        return url_m.group(0)
+    for match in re.finditer(r"https?://[^\s\"'<>\)\]]+", result):
+        url = match.group(0).rstrip(".,;)`")
+        if any(sig in url for sig in _PLACEHOLDER_SIGNALS):
+            print(f"[Executor] ⚠️ Rejected placeholder URL: {url[:80]}")
+            continue
+        if "[" in url or "{" in url or "`" in url:
+            continue
+        return url
+
     return None
 
 
 def _inject_context(params: dict, tool: str, step_results: dict, goal: str = "") -> dict:
     """
     Enriches step parameters with results from prior steps.
-    Pattern matching for obvious cases (no API call).
-    Falls back to Gemini for ambiguous cases.
     """
     if not step_results:
         return params
 
     params = dict(params)  # don't mutate original
 
-    # Self-contained steps that never need enrichment
-    no_enrich = {"os_control", "screen_process"}
-    skip_actions = {"wait", "press", "hotkey", "scroll", "screenshot", "clear_field"}
+    no_enrich    = {"os_control", "screen_process"}
+    skip_actions = {"wait", "press", "hotkey", "scroll", "screenshot",
+                    "clear_field", "wait_for_content"}
     if tool in no_enrich:
         return params
     if tool == "computer" and params.get("action") in skip_actions:
         return params
+    if tool == "browser" and params.get("action") in skip_actions:
+        return params
 
-    # Collect all non-trivial prior results
     all_results = [v for v in step_results.values()
-                   if v and len(v) > 20 and v not in ("Done.", "Completed.", "Task cancelled.")]
+                   if v and len(v) > 20 and v not in (
+                       "Done.", "Completed.", "Task cancelled.",
+                       "Page fully loaded and network idle.",
+                       "Wait complete (network did not fully idle — page may be partially loaded)."
+                   )]
 
     if not all_results:
         return params
@@ -161,25 +195,30 @@ def _inject_context(params: dict, tool: str, step_results: dict, goal: str = "")
             if extracted:
                 params["url"] = extracted
                 print(f"[Executor] 💉 Injected URL: {extracted[:80]}")
-            return params
+            else:
+                print(f"[Executor] ⚠️ No valid URL found in prior result — skipping injection")
+        return params
 
     # ── Terminal download: inject URL from prior result ──
     if tool == "terminal":
         if not params.get("url") and not params.get("command"):
             extracted = _extract_url_from_result(latest)
-            if extracted and "youtube" in extracted:
+            if extracted and any(x in extracted for x in ["youtube", "soundcloud",
+                                                            "youtu.be", "vimeo"]):
                 params["url"] = extracted
                 print(f"[Executor] 💉 Injected download URL: {extracted[:80]}")
         return params
 
     # ── File write: inject content from prior search/reading results ──
     if tool in ("file_controller", "terminal"):
-        cmd = params.get("command", "")
+        cmd     = params.get("command", "")
         content = params.get("content", "")
         if (not content or len(content) < 30) and "[CONTENT]" in cmd:
-            combined = "\n\n---\n\n".join(all_results[:4])
+            combined   = "\n\n---\n\n".join(all_results[:4])
             translated = _translate_to_goal_language(combined, goal)
-            params["command"] = cmd.replace("[CONTENT]", translated[:2000].replace('"', "'"))
+            params["command"] = cmd.replace(
+                "[CONTENT]", translated[:2000].replace('"', "'")
+            )
             print(f"[Executor] 💉 Injected file content ({len(combined)} chars)")
 
     return params
@@ -195,7 +234,7 @@ def _translate_to_goal_language(content: str, goal: str) -> str:
 
         lang_response = client.models.generate_content(
             model="gemini-2.5-flash-lite",
-            contents=(f"What language is this text? Reply with ONLY the language name in English.\n\n"
+            contents=(f"What language is this text? Reply with ONLY the language name.\n\n"
                       f"Text: {goal[:200]}")
         )
         lang = lang_response.text.strip()
@@ -215,6 +254,138 @@ def _translate_to_goal_language(content: str, goal: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────
+# STEP VERIFICATION
+# ─────────────────────────────────────────────────────────────
+
+# Actions worth verifying — only ones where "it worked" is non-obvious
+_VERIFY_ACTIONS = {
+    "go_to", "click", "type", "press",
+}
+
+# Tools that need no verification (they either report success correctly or
+# are fire-and-forget with no meaningful visual state to check)
+_SKIP_VERIFY_TOOLS = {
+    "terminal", "os_control", "vision", "screen_process",
+    "file_controller", "reminder", "open_app",
+}
+
+
+def _should_verify(tool: str, params: dict) -> bool:
+    """Returns True if this step is worth taking a screenshot to verify."""
+    if tool in _SKIP_VERIFY_TOOLS:
+        return False
+    if tool == "browser":
+        action = params.get("action", "")
+        return action in _VERIFY_ACTIONS
+    if tool == "computer":
+        action = params.get("action", "")
+        return action in {"click", "type", "press"}
+    return False
+
+
+def _verify_step(tool: str, params: dict, step_result: str,
+                 step_description: str) -> tuple[bool, str]:
+    """
+    Takes a screenshot of the browser and asks Gemini whether the step
+    actually succeeded. Returns (success: bool, explanation: str).
+
+    Only called for browser navigation/interaction steps.
+    Skips verification if rate-limited — defaults to trusting the result.
+    """
+    try:
+        from actions.browser import _bt, _bt_started
+        if not _bt_started:
+            return True, "Browser not started — skipping verify."
+
+        import asyncio, io
+        from google import genai
+        from google.genai import types
+
+        # Capture the current browser screenshot
+        try:
+            png_bytes = _bt.run(_bt._get_page().__class__  # type check
+                                and asyncio.coroutine,     # not used
+                                timeout=1)
+        except Exception:
+            pass  # fall through to the async approach
+
+        # Use the browser thread's loop to take the screenshot
+        import concurrent.futures
+
+        async def _grab():
+            page = await _bt._get_page()
+            return await page.screenshot(full_page=False)
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(_grab(), _bt._loop)
+            png_bytes = future.result(timeout=8)
+        except Exception as e:
+            print(f"[Verify] ⚠️ Screenshot failed: {e}")
+            return True, "Could not screenshot — assuming success."
+
+        try:
+            import PIL.Image
+            img = PIL.Image.open(io.BytesIO(png_bytes)).convert("RGB")
+            img.thumbnail([1280, 720], PIL.Image.BILINEAR)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=60)
+            image_bytes = buf.getvalue()
+        except Exception:
+            image_bytes = png_bytes
+
+        client = genai.Client(api_key=_get_api_key())
+
+        action  = params.get("action", "")
+        url     = params.get("url", "")
+        target  = params.get("description", "") or params.get("text", "") or url
+
+        prompt = (
+            f"I just attempted this browser action and got this result.\n\n"
+            f"Step description: {step_description}\n"
+            f"Action: {action}\n"
+            f"Target: {target}\n"
+            f"Reported result: {step_result[:200]}\n\n"
+            f"Look at the screenshot and answer:\n"
+            f"1. Did the action succeed? (YES or NO)\n"
+            f"2. If NO, what is the actual state of the page? (1 sentence)\n\n"
+            f"Reply in this exact format:\n"
+            f"RESULT: YES\n"
+            f"or\n"
+            f"RESULT: NO\n"
+            f"ISSUE: <what went wrong>\n"
+        )
+
+        response = client.models.generate_content(
+            model="gemini-2.5-flash-lite",
+            contents=types.Content(role="user", parts=[
+                types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
+                types.Part.from_text(text=prompt)
+            ])
+        )
+
+        text = response.text.strip()
+        success = "RESULT: YES" in text.upper()
+        issue   = ""
+
+        if not success:
+            m = re.search(r"ISSUE:\s*(.+)", text, re.IGNORECASE)
+            issue = m.group(1).strip() if m else "Unknown issue."
+            print(f"[Verify] ❌ Step failed verification: {issue}")
+        else:
+            print(f"[Verify] ✅ Step verified OK")
+
+        return success, issue
+
+    except Exception as e:
+        # If verification itself errors (e.g. rate limit), trust the step result
+        if "429" in str(e):
+            print(f"[Verify] ⏭️ Rate limited — skipping verify, trusting result")
+        else:
+            print(f"[Verify] ⚠️ Verify error: {e}")
+        return True, ""
+
+
+# ─────────────────────────────────────────────────────────────
 # CONDITION EVALUATION
 # ─────────────────────────────────────────────────────────────
 
@@ -222,24 +393,21 @@ def _evaluate_condition(condition: str, step_results: dict) -> bool:
     """
     Evaluates whether a step's condition is satisfied based on prior results.
     Returns True if the step should run, False if it should be skipped.
-    Uses Gemini to make the judgment.
     """
     if not condition:
         return True
 
-    # Fast-path: check for obvious NOT FOUND markers
     all_results_text = " ".join(str(v) for v in step_results.values())
     not_found_signals = ["NOT FOUND", "not found", "no assignment", "nothing found",
-                         "couldn't find", "could not find", "doesn't exist", "does not exist",
-                         "no emails", "no results", "no tasks"]
+                         "couldn't find", "could not find", "doesn't exist",
+                         "does not exist", "no emails", "no results", "no tasks",
+                         "count\": 0", "\"found\": []"]
 
-    # If condition says "only if found" and result says not found → skip
     condition_lower = condition.lower()
     if any(sig in all_results_text.lower() for sig in not_found_signals):
         if any(w in condition_lower for w in ["found", "exists", "has", "shows"]):
             return False
 
-    # Gemini judgment for ambiguous cases
     try:
         from google import genai
         client = genai.Client(api_key=_get_api_key())
@@ -277,8 +445,8 @@ def _generate_condition_false_message(condition: str, goal: str) -> str:
         response = client.models.generate_content(
             model="gemini-2.5-flash-lite",
             contents=(
-                f"Generate a short, natural spoken sentence (1-2 sentences) explaining that "
-                f"this condition was not met, so remaining steps were skipped. "
+                f"Generate a short natural spoken sentence (1-2 sentences) explaining "
+                f"that this condition was not met, so remaining steps were skipped. "
                 f"Address the user as 'sir'. Be specific about what was not found.\n\n"
                 f"Condition that was false: {condition}\n"
                 f"Overall goal: {goal}"
@@ -306,11 +474,12 @@ def _generate_summary(goal: str, completed_steps: list, step_results: dict,
         from google import genai
         client = genai.Client(api_key=_get_api_key())
 
-        steps_str  = "\n".join(f"- {s.get('description', '')}" for s in completed_steps)
+        steps_str   = "\n".join(f"- {s.get('description', '')}" for s in completed_steps)
         results_str = "\n".join(
             f"Step {k} result: {str(v)[:300]}"
             for k, v in step_results.items()
-            if v and v not in ("Done.", "Completed.", "Screen captured and analyzed.")
+            if v and v not in ("Done.", "Completed.", "Screen captured and analyzed.",
+                               "Page fully loaded and network idle.")
         )
 
         prompt = (
@@ -318,8 +487,8 @@ def _generate_summary(goal: str, completed_steps: list, step_results: dict,
             f"Steps completed:\n{steps_str}\n\n"
             f"Results obtained:\n{results_str}\n\n"
             "Write 1-2 natural sentences summarizing what was accomplished. "
-            "If real data was obtained (prices, times, assignments, file paths, temperatures), "
-            "include the specific data in the summary. "
+            "If real data was obtained (prices, times, assignments, file paths, "
+            "temperatures, track names), include the specific data in the summary. "
             "Do NOT say 'I completed N steps'. Address the user as 'sir'. "
             "Respond in the same language as the goal."
         )
@@ -338,6 +507,73 @@ def _generate_summary(goal: str, completed_steps: list, step_results: dict,
         if speak:
             speak(fallback)
         return fallback
+
+
+# ─────────────────────────────────────────────────────────────
+# PLAN PREPROCESSING
+# ─────────────────────────────────────────────────────────────
+
+def _preprocess_plan(plan: dict) -> dict:
+    """
+    Rewrites plan steps to insert wait_for_content before parse_html or get_text
+    on known JS-heavy sites, so the DOM has time to populate before reading.
+    This is what fixes Google Classroom, SoundCloud, YouTube DOM reading.
+    """
+    JS_HEAVY_DOMAINS = [
+        "classroom.google.com",
+        "soundcloud.com",
+        "youtube.com",
+        "youtu.be",
+        "mail.google.com",
+        "drive.google.com",
+        "docs.google.com",
+        "notion.so",
+        "figma.com",
+        "canva.com",
+    ]
+
+    steps     = plan.get("steps", [])
+    new_steps = []
+    inserted  = set()  # track which step numbers already have a wait before them
+
+    for step in steps:
+        tool   = step.get("tool", "")
+        params = step.get("parameters", {})
+        action = params.get("action", "")
+
+        # Check if the previous step navigated to a JS-heavy site
+        needs_wait = False
+        if tool == "browser" and action in ("parse_html", "get_text"):
+            # Look back at previous steps for a go_to to a JS-heavy site
+            for prev in new_steps:
+                if (prev.get("tool") == "browser" and
+                        prev.get("parameters", {}).get("action") == "go_to"):
+                    url = prev.get("parameters", {}).get("url", "")
+                    if any(domain in url for domain in JS_HEAVY_DOMAINS):
+                        needs_wait = True
+                        break
+
+        step_num = step.get("step", len(new_steps) + 1)
+
+        if needs_wait and step_num not in inserted:
+            # Insert a wait_for_content step before this read step
+            wait_step = {
+                "step":        f"{step_num}_wait",
+                "tool":        "browser",
+                "description": "Wait for page JavaScript to finish loading",
+                "parameters":  {"action": "wait_for_content", "timeout_ms": 6000},
+                "critical":    False,
+            }
+            if "condition" in step:
+                wait_step["condition"] = step["condition"]
+            new_steps.append(wait_step)
+            inserted.add(step_num)
+            print(f"[Executor] 💉 Auto-inserted wait_for_content before step {step_num}")
+
+        new_steps.append(step)
+
+    plan["steps"] = new_steps
+    return plan
 
 
 # ─────────────────────────────────────────────────────────────
@@ -360,8 +596,8 @@ class AgentExecutor:
         replan_attempts  = 0
         completed_steps  = []
         step_results:    dict[int, str] = {}
-        condition_spoken = False   # flag: already spoken a condition-false message
-        plan             = create_plan(goal)
+        condition_spoken = False
+        plan             = _preprocess_plan(create_plan(goal))
 
         while True:
             steps = plan.get("steps", [])
@@ -397,10 +633,8 @@ class AgentExecutor:
                             speak(msg)
                         condition_spoken = True
                         print(f"[Executor] 🔀 Condition false — skipping remaining conditional steps")
-                        # Skip this step and all following conditional steps
                         continue
                 elif condition and condition_spoken:
-                    # A condition already failed — skip all subsequent conditional steps
                     print(f"[Executor] ⏭️ Skipping step {step_num} (prior condition was false)")
                     continue
 
@@ -419,6 +653,18 @@ class AgentExecutor:
                     try:
                         result                = _call_tool(tool, params, speak)
                         step_results[step_num] = result
+
+                        # ── Verification ─────────────────────────
+                        # Only verify steps where failure isn't self-evident
+                        # from the return value (browser navigation/interaction).
+                        if _should_verify(tool, params):
+                            verified, issue = _verify_step(tool, params, result, desc)
+                            if not verified:
+                                # Treat verification failure as a step failure
+                                raise RuntimeError(
+                                    f"Step verified as failed: {issue}"
+                                )
+
                         completed_steps.append(step)
                         print(f"[Executor] ✅ Step {step_num}: {str(result)[:100]}")
                         step_ok = True
@@ -426,7 +672,8 @@ class AgentExecutor:
 
                     except Exception as e:
                         error_msg = str(e)
-                        print(f"[Executor] ❌ Step {step_num} attempt {attempt} failed: {error_msg[:100]}")
+                        print(f"[Executor] ❌ Step {step_num} attempt {attempt} "
+                              f"failed: {error_msg[:100]}")
 
                         recovery = analyze_error(step, error_msg, attempt=attempt)
                         decision = recovery["decision"]
@@ -486,14 +733,14 @@ class AgentExecutor:
                     break
 
             if success:
-                # If a condition was already spoken, don't generate a new summary
                 if condition_spoken:
                     return "Condition not met — task partially completed as explained."
                 return _generate_summary(goal, completed_steps, step_results, speak)
 
             if replan_attempts >= self.MAX_REPLAN_ATTEMPTS:
                 msg = (f"Task failed after {replan_attempts + 1} attempts, sir. "
-                       f"The step '{failed_step.get('description', '')}' could not be completed.")
+                       f"The step '{failed_step.get('description', '')}' "
+                       f"could not be completed.")
                 if speak:
                     speak(msg)
                 return msg
@@ -502,4 +749,4 @@ class AgentExecutor:
                 speak("Adjusting my approach, sir.")
 
             replan_attempts += 1
-            plan = replan(goal, completed_steps, failed_step, failed_error)
+            plan = _preprocess_plan(replan(goal, completed_steps, failed_step, failed_error))

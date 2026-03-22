@@ -100,6 +100,8 @@ browser
   direction: "up" | "down" (for scroll)
   key: string (for press: Enter, Escape, Tab)
   limit: int (for parse_html, default 5)
+  max_chars: int (for get_text, default 6000 — increase for long pages like Todoist/Classroom)
+  timeout_ms: int (for wait_for_content, default 5000)
   timeout_ms: int (for wait_for_content, default 5000)
 
 vision
@@ -108,7 +110,7 @@ vision
 
 computer
   action: type | click | double_click | right_click | hotkey | press |
-          scroll | move | copy | paste | screenshot | wait | clear_field |
+          scroll | move | drag | copy | paste | screenshot | wait | clear_field |
           focus_window | screen_find | screen_click
   text: string (for type/paste)
   x, y: int (for click/move)
@@ -616,7 +618,7 @@ def _fallback_plan_single(goal: str) -> dict:
         }
 
     # Media downloads — only intent words, not format words alone
-    if any(w in g for w in ["download", "yt-dlp", "save video", "save audio"]):
+    if any(re.search(r"\b" + w + r"\b", g) for w in ["download", "yt-dlp", "save video", "save audio"]):
         url_m = re.search(r"https?://\S+", goal)
         url   = url_m.group(0) if url_m else ""
         return {
@@ -787,6 +789,52 @@ def _fallback_plan_single(goal: str) -> dict:
             ]
         }
 
+    # File operations
+    if any(w in g for w in ["organize desktop", "organize my desktop",
+                              "list files", "find files", "find pdf",
+                              "create folder", "create file", "delete file",
+                              "move file", "copy file", "rename file",
+                              "disk usage", "largest file"]):
+        # Determine the best action from keywords
+        action = "list"
+        if "organize" in g:
+            action = "organize_desktop"
+        elif "create folder" in g or "new folder" in g:
+            action = "create_folder"
+        elif "create file" in g or "new file" in g:
+            action = "create_file"
+        elif "delete" in g or "remove" in g:
+            action = "delete"
+        elif "move" in g:
+            action = "move"
+        elif "copy" in g:
+            action = "copy"
+        elif "rename" in g:
+            action = "rename"
+        elif "find" in g:
+            action = "find"
+        elif "disk usage" in g or "storage" in g:
+            action = "disk_usage"
+        elif "largest" in g:
+            action = "largest"
+        params = {"action": action}
+        # Try to extract path shortcut
+        for shortcut in ["desktop", "downloads", "documents", "home"]:
+            if shortcut in g:
+                params["path"] = shortcut
+                break
+        # Try to extract extension for find
+        ext_m = re.search(r"\.\w{2,4}\b", g)
+        if ext_m and action == "find":
+            params["extension"] = ext_m.group(0)
+        return {
+            "goal": goal,
+            "steps": [{"step": 1, "tool": "file_controller",
+                        "description": f"File operation: {action}",
+                        "parameters": params,
+                        "critical": True}]
+        }
+
     # Weather
     if "weather" in g:
         # Extract city/location from the goal
@@ -935,7 +983,7 @@ def replan(goal: str, completed_steps: list, failed_step: dict, error: str,
         prompt += f"Data gathered so far:\n{results_context[:1000]}\n\n"
     prompt += (
         f"Create a REVISED plan for the REMAINING work only. Do not repeat completed steps. "
-        f"Use only browser, vision, computer, terminal, os_control tools. "
+        f"Use only browser, vision, computer, terminal, os_control, open_app, file_controller, reminder tools. "
         f"Remember: always insert wait_for_content before parse_html/get_text on JS-heavy sites. "
         f"For task managers (Todoist, Notion, Trello etc): use get_text not vision_read."
     )

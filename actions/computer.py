@@ -67,7 +67,7 @@ def _screenshot_jpeg() -> bytes:
         # Scale down if very large to reduce API payload
         if w > 1280:
             scale  = 1280 / w
-            img    = img.resize((1280, int(h * scale)), PIL.Image.BILINEAR)
+            img    = img.resize((1280, int(h * scale)), PIL.Image.Resampling.BILINEAR)
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=JPEG_Q)
         return buf.getvalue()

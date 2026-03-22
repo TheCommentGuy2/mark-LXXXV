@@ -1,7 +1,7 @@
 # main.py
 # JARVIS — Gemini Live API Voice Session
 #
-# Five universal primitives: browser, vision, computer, terminal, os_control
+# Eight tools: browser, vision, computer, terminal, os_control, open_app, file_controller, reminder
 # + agent_task (multi-step planner) + screen_process (voice-activated screen analysis)
 #
 # Text input bar: attached to existing Tkinter window without modifying ui.py.
@@ -193,7 +193,8 @@ TOOL_DECLARATIONS = [
                     "type": "STRING",
                     "description": (
                         "Known selector key for parse_html: youtube_video_link | "
-                        "google_first_result | google_weather_temp | wikipedia_content"
+                        "google_first_result | google_weather_temp | wikipedia_content | "
+                        "soundcloud_track | classroom_assignments"
                     )
                 },
                 "attribute": {

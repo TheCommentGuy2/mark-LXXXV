@@ -241,7 +241,7 @@ class JarvisUI:
             fw = int(FW * self.scale)
             if (self._face_scale_cache is None or
                     abs(self._face_scale_cache[0] - self.scale) > 0.004):
-                scaled = self._face_pil.resize((fw, fw), Image.BILINEAR)
+                scaled = self._face_pil.resize((fw, fw), Image.Resampling.BILINEAR)
                 tk_img = ImageTk.PhotoImage(scaled)
                 self._face_scale_cache = (self.scale, tk_img)
             c.create_image(FCX, FCY, image=self._face_scale_cache[1])

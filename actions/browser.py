@@ -777,7 +777,7 @@ class _BrowserThread:
             png_bytes = await page.screenshot(full_page=False)
             if _PIL:
                 img = PIL.Image.open(io.BytesIO(png_bytes)).convert("RGB")
-                img.thumbnail([IMG_MAX_W, IMG_MAX_H], PIL.Image.BILINEAR)
+                img.thumbnail([IMG_MAX_W, IMG_MAX_H], PIL.Image.Resampling.BILINEAR)
                 buf = io.BytesIO()
                 img.save(buf, format="JPEG", quality=JPEG_Q)
                 image_bytes = buf.getvalue()

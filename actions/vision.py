@@ -62,7 +62,7 @@ def _to_jpeg(img_bytes: bytes) -> bytes:
         return img_bytes
     try:
         img = PIL.Image.open(io.BytesIO(img_bytes)).convert("RGB")
-        img.thumbnail([IMG_MAX_W, IMG_MAX_H], PIL.Image.BILINEAR)
+        img.thumbnail([IMG_MAX_W, IMG_MAX_H], PIL.Image.Resampling.BILINEAR)
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=JPEG_Q, optimize=False)
         return buf.getvalue()
@@ -143,7 +143,7 @@ def _capture_camera() -> bytes:
     if _PIL:
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         img = PIL.Image.fromarray(rgb)
-        img.thumbnail([IMG_MAX_W, IMG_MAX_H], PIL.Image.BILINEAR)
+        img.thumbnail([IMG_MAX_W, IMG_MAX_H], PIL.Image.Resampling.BILINEAR)
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=JPEG_Q)
         return buf.getvalue()

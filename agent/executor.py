@@ -267,13 +267,15 @@ def _verify_step(tool: str, params: dict, step_result: str,
     step_result = step_result or ""
     result_lower = step_result.lower().strip()
 
-    for sig in _FAILURE_SIGNALS:
-        if sig in result_lower:
-            return False, f"Failure signal '{sig}': {step_result[:120]}"
-
+    # Check success FIRST — structured results like {"found": [...]} should
+    # win over incidental substrings like "not found" in text content.
     for sig in _SUCCESS_SIGNALS:
         if sig in result_lower:
             return True, ""
+
+    for sig in _FAILURE_SIGNALS:
+        if sig in result_lower:
+            return False, f"Failure signal '{sig}': {step_result[:120]}"
 
     if len(step_result.strip()) > 5:
         return True, ""

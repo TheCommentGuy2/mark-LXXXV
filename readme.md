@@ -79,39 +79,6 @@ A text input bar is available in the JARVIS window (Ctrl+T or the `⌨` button i
 
 ---
 
-## What JARVIS Can Now Do
-
-Things that were impossible with the original and are now in scope:
-
-- Navigate to any website and read its content
-- Check Google Classroom for assignments due tomorrow
-- Find the most-viewed YouTube video matching a search and download it as MP3
-- Open Gmail and read unread emails
-- Get flight options from Google Flights for any route
-- Send a WhatsApp message via WhatsApp Web
-- Convert any video file to any audio format via ffmpeg
-- Check disk usage, RAM, running processes from natural language
-- Set volume, brightness, dark mode, Wi-Fi via system APIs (not GUI clicking)
-- Research a topic across multiple sources and save to a file
-- Get a Google Maps route and travel time
-- Any task on any website — if you can describe it, JARVIS can attempt it
-
----
-
-## How to phrase requests
-
-JARVIS works best when requests don't require mid-task decisions. If a task has options you'd normally choose between (ride type, seat, which of 5 results), state your preference upfront:
-
-| Less ideal | Better |
-|-----------|--------|
-| "Order me an Uber" | "Order me an UberX to work using my saved payment method" |
-| "Download that YouTube video" | "Download the most-viewed Interstellar edit as MP3 to my Desktop" |
-| "Check my flights" | "Show me the cheapest flights from Istanbul to London on March 27" |
-
-For read-and-report tasks (check schedule, read emails, find prices), no special phrasing is needed — those run fully autonomously.
-
----
-
 ## Configuration
 
 All config is stored in `config/api_keys.json`:

@@ -418,8 +418,17 @@ class _BrowserThread:
         return future.result(timeout=timeout)
 
     async def _get_page(self):
-        if self._page is None or self._page.is_closed():
-            await self._launch()
+        if self._page is not None and not self._page.is_closed():
+            # Lightweight ping to verify CDP connection is still alive
+            try:
+                await self._page.evaluate("1")
+                return self._page
+            except Exception:
+                print("[Browser] ⚠️ CDP connection lost — reconnecting...")
+                self._browser = None
+                self._context = None
+                self._page = None
+        await self._launch()
         return self._page
 
     async def _launch(self):
@@ -512,22 +521,31 @@ class _BrowserThread:
         return (await self._get_page()).url
 
     async def _back(self) -> str:
-        await (await self._get_page()).go_back()
-        return "Navigated back."
+        try:
+            await (await self._get_page()).go_back()
+            return "Navigated back."
+        except Exception as e:
+            return f"Back navigation failed: {e}"
 
     async def _reload(self) -> str:
-        await (await self._get_page()).reload()
-        return "Page reloaded."
+        try:
+            await (await self._get_page()).reload()
+            return "Page reloaded."
+        except Exception as e:
+            return f"Reload failed: {e}"
 
     async def _new_tab(self, url: str = "") -> str:
-        page       = await self._context.new_page()
-        self._page = page
-        if url:
-            if not url.startswith("http"):
-                url = "https://" + url
-            await page.goto(url, wait_until="domcontentloaded", timeout=20000)
-            await asyncio.sleep(DELAY_AFTER_NAVIGATE)
-        return f"New tab{': ' + url if url else ''}."
+        try:
+            page       = await self._context.new_page()
+            self._page = page
+            if url:
+                if not url.startswith("http"):
+                    url = "https://" + url
+                await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                await asyncio.sleep(DELAY_AFTER_NAVIGATE)
+            return f"New tab{': ' + url if url else ''}."
+        except Exception as e:
+            return f"New tab failed: {e}"
 
     async def _close_tab(self) -> str:
         if self._page and not self._page.is_closed():
@@ -698,8 +716,51 @@ class _BrowserThread:
     # ── Tier 3: Page text ────────────────────────────────────
 
     async def _get_text(self, max_chars: int = 6000) -> str:
+        """
+        Smart content extraction — strips nav/footer/sidebar noise via JS,
+        tries semantic main-content selectors first, falls back to cleaned body.
+        Works on any site without per-site rules.
+        """
+        page = await self._get_page()
         try:
-            text = await (await self._get_page()).inner_text("body")
+            text = await page.evaluate("""
+                () => {
+                    // 1. Remove noise elements from a cloned DOM so original page is untouched
+                    const clone = document.body.cloneNode(true);
+                    const noiseSelectors = [
+                        'nav', 'header', 'footer', 'aside',
+                        '[role="navigation"]', '[role="banner"]', '[role="contentinfo"]',
+                        '[role="complementary"]',
+                        '.sidebar', '.nav', '.navbar', '.menu', '.footer', '.header',
+                        '.cookie-banner', '.cookie-consent', '.ad', '.ads', '.advertisement',
+                        '.social-share', '.share-buttons', '.related-posts',
+                        '.comments', '#comments', '.popup', '.modal',
+                        'script', 'style', 'noscript', 'iframe',
+                    ];
+                    for (const sel of noiseSelectors) {
+                        clone.querySelectorAll(sel).forEach(el => el.remove());
+                    }
+
+                    // 2. Try semantic main-content selectors
+                    const mainSelectors = [
+                        'main', 'article', '[role="main"]',
+                        '#mw-content-text',          // Wikipedia
+                        '#content', '#main-content',
+                        '.post-content', '.article-content', '.article-body',
+                        '.entry-content', '.page-content',
+                    ];
+                    for (const sel of mainSelectors) {
+                        const el = clone.querySelector(sel);
+                        if (el) {
+                            const t = el.innerText.trim();
+                            if (t.length > 200) return t;
+                        }
+                    }
+
+                    // 3. Fallback: cleaned body text
+                    return clone.innerText.trim();
+                }
+            """)
             text = re.sub(r"\n{3,}", "\n\n", text)
             text = re.sub(r"[ \t]+", " ", text)
             return text[:max_chars]

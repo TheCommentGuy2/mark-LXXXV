@@ -1,13 +1,30 @@
 # actions/file_controller.py
 # File management — create, delete, move, rename, list, find, organize
 
+import platform
 import shutil
 from pathlib import Path
 from datetime import datetime
 import send2trash
 
+_OS = platform.system()
+
 def _get_desktop() -> Path:
-    """Returns desktop path — works on Windows, Mac, Linux."""
+    """Returns actual desktop path, handling OneDrive redirection on Windows."""
+    if _OS == "Windows":
+        try:
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders"
+            )
+            desktop, _ = winreg.QueryValueEx(key, "Desktop")
+            winreg.CloseKey(key)
+            p = Path(desktop)
+            if p.exists():
+                return p
+        except Exception:
+            pass
     return Path.home() / "Desktop"
 
 
@@ -21,7 +38,7 @@ def _resolve_path(raw: str) -> Path:
     Supports shortcuts: 'desktop', 'downloads', 'documents', 'home'
     """
     shortcuts = {
-        "desktop":   Path.home() / "Desktop",
+        "desktop":   _get_desktop(),
         "downloads": Path.home() / "Downloads",
         "documents": Path.home() / "Documents",
         "pictures":  Path.home() / "Pictures",

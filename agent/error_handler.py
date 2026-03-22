@@ -16,13 +16,13 @@ API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
 
 
 class ErrorDecision(Enum):
-    RETRY       = "retry"      
-    SKIP        = "skip"       
-    REPLAN      = "replan"     
-    ABORT       = "abort"    
+    RETRY       = "retry"
+    SKIP        = "skip"
+    REPLAN      = "replan"
+    ABORT       = "abort"
 
 
-ERROR_ANALYST_PROMPT = """You are the error recovery module of MARK XXV AI assistant.
+ERROR_ANALYST_PROMPT = """You are the error recovery module of JARVIS AI assistant.
 
 A task step has failed. Analyze the error and decide what to do.
 
@@ -36,16 +36,31 @@ DECISIONS:
 Also provide:
 - A brief explanation of WHY it failed (1 sentence)
 - A fix suggestion if decision is replan (what to try instead)
-- Max retries: how many times to retry if decision is retry (1 or 2)
 
 Return ONLY valid JSON:
 {
   "decision": "retry|skip|replan|abort",
   "reason": "why it failed",
   "fix_suggestion": "what to try instead (for replan)",
-  "max_retries": 1,
   "user_message": "Short message to tell the user (max 15 words)"
 }
+"""
+
+
+FIX_GENERATOR_PROMPT = """You are the error recovery module of JARVIS AI assistant.
+
+A task step failed. Generate a SINGLE replacement step using ONLY these tools:
+  browser, vision, computer, terminal, os_control
+
+Return ONLY valid JSON for a single step:
+{"tool": "browser|vision|computer|terminal|os_control", "description": "what this step does", "parameters": {...}}
+
+RULES:
+- Use only the 5 tools above. No other tool names.
+- The parameters must match the tool's expected format.
+- For browser: parameters must include "action" (go_to, get_text, parse_html, vision_read, click, etc.)
+- For terminal: parameters must include "task" (natural language) or "command" (exact command)
+- For os_control: parameters must include "action" or "description"
 """
 
 
@@ -63,23 +78,14 @@ def analyze_error(
     """
     Analyzes a failed step and returns a recovery decision.
 
-    Args:
-        step         : The step dict that failed
-        error        : Error message/traceback
-        attempt      : Current attempt number
-        max_attempts : How many times we've already tried
-
     Returns:
         {
             "decision": ErrorDecision,
             "reason": str,
             "fix_suggestion": str,
-            "max_retries": int,
             "user_message": str
         }
     """
-    import google.generativeai as genai
-
     # If we've already retried enough, escalate to replan
     if attempt >= max_attempts:
         print(f"[ErrorHandler] ⚠️ Max attempts reached for step {step.get('step')} — forcing replan")
@@ -87,17 +93,15 @@ def analyze_error(
             "decision":      ErrorDecision.REPLAN,
             "reason":        f"Failed {attempt} times: {error[:100]}",
             "fix_suggestion": "Try a completely different approach or tool",
-            "max_retries":   0,
             "user_message":  "Trying a different approach, sir."
         }
 
-    genai.configure(api_key=_get_api_key())
-    model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash-lite",
-        system_instruction=ERROR_ANALYST_PROMPT
-    )
+    try:
+        from google import genai
 
-    prompt = f"""Failed step:
+        client = genai.Client(api_key=_get_api_key())
+
+        prompt = f"""Failed step:
 Tool: {step.get('tool')}
 Description: {step.get('description')}
 Parameters: {json.dumps(step.get('parameters', {}), indent=2)}
@@ -108,10 +112,13 @@ Error:
 
 Attempt number: {attempt}"""
 
-    try:
-        response = model.generate_content(prompt)
-        text     = response.text.strip()
-        text     = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
+        response = client.models.generate_content(
+            model="gemini-2.5-flash-lite",
+            contents=prompt,
+            config={"system_instruction": ERROR_ANALYST_PROMPT}
+        )
+        text = response.text.strip()
+        text = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
 
         result = json.loads(text)
         decision_str = result.get("decision", "replan").lower()
@@ -122,7 +129,6 @@ Attempt number: {attempt}"""
             "abort":  ErrorDecision.ABORT,
         }
         result["decision"] = decision_map.get(decision_str, ErrorDecision.REPLAN)
-
 
         if step.get("critical") and result["decision"] == ErrorDecision.SKIP:
             result["decision"]     = ErrorDecision.REPLAN
@@ -137,7 +143,6 @@ Attempt number: {attempt}"""
             "decision":       ErrorDecision.REPLAN,
             "reason":         str(e),
             "fix_suggestion": "Try alternative approach",
-            "max_retries":    1,
             "user_message":   "Encountered an issue, adjusting approach, sir."
         }
 
@@ -145,54 +150,56 @@ Attempt number: {attempt}"""
 def generate_fix(step: dict, error: str, fix_suggestion: str) -> dict:
     """
     When decision is REPLAN and a fix suggestion exists,
-    generates a replacement step using generated_code as fallback.
+    generates a replacement step using real tools.
 
-    Returns a modified step dict.
+    Returns a modified step dict with a valid tool name.
     """
-    import google.generativeai as genai
+    try:
+        from google import genai
 
-    genai.configure(api_key=_get_api_key())
-    model = genai.GenerativeModel(model_name="gemini-2.0-flash")
+        client = genai.Client(api_key=_get_api_key())
 
-    prompt = f"""A task step failed. Generate a replacement step.
+        prompt = f"""A task step failed. Generate a replacement step.
 
 Original step:
-Tool: {step.get('tool')}
-Description: {step.get('description')}
-Parameters: {json.dumps(step.get('parameters', {}), indent=2)}
+  Tool: {step.get('tool')}
+  Description: {step.get('description')}
+  Parameters: {json.dumps(step.get('parameters', {}), indent=2)}
 
 Error: {error[:300]}
 Fix suggestion: {fix_suggestion}
 
-Write a Python script that accomplishes the same goal differently.
-Return ONLY the Python code, no explanation."""
+Return ONLY valid JSON for a single replacement step."""
 
-    try:
-        response = model.generate_content(prompt)
-        code = response.text.strip()
-        code = re.sub(r"```(?:python)?", "", code).strip().rstrip("`").strip()
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config={"system_instruction": FIX_GENERATOR_PROMPT}
+        )
+
+        text = response.text.strip()
+        text = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
+        result = json.loads(text)
+
+        valid_tools = {"browser", "vision", "computer", "terminal", "os_control"}
+        tool = result.get("tool", "terminal")
+        if tool not in valid_tools:
+            tool = "terminal"
 
         return {
             "step":        step.get("step"),
-            "tool":        "code_helper",
-            "description": f"Auto-fix for: {step.get('description')}",
-            "parameters": {
-                "action":      "run",
-                "description": fix_suggestion,
-                "code":        code,
-                "language":    "python"
-            },
-            "depends_on": step.get("depends_on", []),
-            "critical":   step.get("critical", False)
+            "tool":        tool,
+            "description": result.get("description", f"Auto-fix for: {step.get('description')}"),
+            "parameters":  result.get("parameters", {"task": step.get("description", "")}),
+            "critical":    step.get("critical", False)
         }
 
     except Exception as e:
         print(f"[ErrorHandler] ⚠️ Fix generation failed: {e}")
         return {
             "step":        step.get("step"),
-            "tool":        "generated_code",
+            "tool":        "terminal",
             "description": f"Fallback for: {step.get('description')}",
-            "parameters":  {"description": step.get("description", "")},
-            "depends_on":  step.get("depends_on", []),
+            "parameters":  {"task": step.get("description", "")},
             "critical":    step.get("critical", False)
         }

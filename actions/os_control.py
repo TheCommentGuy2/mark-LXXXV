@@ -456,22 +456,26 @@ def minimize_window() -> str:
 
 def maximize_window() -> str:
     _ensure_pyautogui()
-    pyautogui.hotkey("win", "up") if _OS == "Windows" else None
-    return "Window maximized."
+    if _OS == "Windows":
+        pyautogui.hotkey("win", "up")
+        return "Window maximized."
+    return "Window maximize not supported on this platform."
 
 
 def snap_left() -> str:
     _ensure_pyautogui()
     if _OS == "Windows":
         pyautogui.hotkey("win", "left")
-    return "Window snapped left."
+        return "Window snapped left."
+    return "Window snap not supported on this platform."
 
 
 def snap_right() -> str:
     _ensure_pyautogui()
     if _OS == "Windows":
         pyautogui.hotkey("win", "right")
-    return "Window snapped right."
+        return "Window snapped right."
+    return "Window snap not supported on this platform."
 
 
 def switch_window() -> str:

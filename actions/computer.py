@@ -93,15 +93,26 @@ def _find_element_on_screen(description: str) -> tuple[int, int] | None:
         client = genai.Client(api_key=_get_api_key())
 
         _ensure_pyautogui()
-        w, h        = pyautogui.size()
+        screen_w, screen_h = pyautogui.size()
         image_bytes = _screenshot_jpeg()
+
+        # Calculate the actual image dimensions after resize in _screenshot_jpeg
+        if _PIL and screen_w > 1280:
+            scale_factor = 1280 / screen_w
+            img_w = 1280
+            img_h = int(screen_h * scale_factor)
+        else:
+            scale_factor = 1.0
+            img_w = screen_w
+            img_h = screen_h
 
         image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
         text_part  = types.Part.from_text(
             text=(
-                f"This is a screenshot of a {w}x{h} screen. "
+                f"This is a screenshot of size {img_w}x{img_h} pixels. "
                 f"Find the element: '{description}'. "
-                f"Return ONLY: x,y — the pixel coordinates of the element's center. "
+                f"Return ONLY: x,y — the pixel coordinates of the element's center "
+                f"relative to the image dimensions ({img_w}x{img_h}). "
                 f"If not found, return exactly: NOT_FOUND"
             )
         )
@@ -117,7 +128,12 @@ def _find_element_on_screen(description: str) -> tuple[int, int] | None:
 
         match = re.search(r"(\d+)\s*,\s*(\d+)", text)
         if match:
-            return int(match.group(1)), int(match.group(2))
+            ix, iy = int(match.group(1)), int(match.group(2))
+            # Scale coordinates back to actual screen resolution
+            if scale_factor < 1.0:
+                ix = int(ix / scale_factor)
+                iy = int(iy / scale_factor)
+            return ix, iy
 
     except Exception as e:
         print(f"[Computer] ⚠️ Screen analysis failed: {e}")
@@ -132,11 +148,13 @@ def _find_element_on_screen(description: str) -> tuple[int, int] | None:
 def _type_text(text: str, interval: float = 0.03) -> str:
     _ensure_pyautogui()
     time.sleep(0.2)
-    if _PYPERCLIP and len(text) > 15:
+    # Always prefer clipboard paste — handles Unicode, special chars, any length
+    if _PYPERCLIP:
         pyperclip.copy(text)
         time.sleep(0.1)
         pyautogui.hotkey("ctrl", "v")
     else:
+        # Last resort: ASCII-only typewrite (no Unicode support)
         pyautogui.typewrite(text, interval=interval)
     return f"Typed: {text[:60]}{'...' if len(text) > 60 else ''}"
 
@@ -294,23 +312,29 @@ def computer(
             )
 
         elif action in ("click", "left_click"):
+            x = parameters.get("x")
+            y = parameters.get("y")
             return _click(
-                x=parameters.get("x"),
-                y=parameters.get("y"),
+                x=int(x) if x is not None else None,
+                y=int(y) if y is not None else None,
                 button="left", clicks=1
             )
 
         elif action == "double_click":
+            x = parameters.get("x")
+            y = parameters.get("y")
             return _click(
-                x=parameters.get("x"),
-                y=parameters.get("y"),
+                x=int(x) if x is not None else None,
+                y=int(y) if y is not None else None,
                 button="left", clicks=2
             )
 
         elif action == "right_click":
+            x = parameters.get("x")
+            y = parameters.get("y")
             return _click(
-                x=parameters.get("x"),
-                y=parameters.get("y"),
+                x=int(x) if x is not None else None,
+                y=int(y) if y is not None else None,
                 button="right", clicks=1
             )
 

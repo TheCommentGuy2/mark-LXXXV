@@ -98,7 +98,15 @@ class JarvisUI:
             self._show_setup_ui()
 
         self._animate()
-        self.root.protocol("WM_DELETE_WINDOW", lambda: os._exit(0))
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _on_close(self):
+        """Graceful shutdown — destroy Tkinter first, then force-exit to kill daemon threads."""
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+        os._exit(0)
 
     def _load_face(self, path):
         FW = self.FACE_SZ
@@ -292,6 +300,10 @@ class JarvisUI:
                       text="TheCommentGuy2 · Original by FatihMakes ·  CLASSIFIED  ·  MARK LXXXV")
 
     def write_log(self, text: str):
+        # Thread safety: if called from non-main thread, schedule on main thread
+        if threading.current_thread() is not threading.main_thread():
+            self.root.after(0, self.write_log, text)
+            return
         self.typing_queue.append(text)
         tl = text.lower()
         self.status_text = ("PROCESSING" if tl.startswith("you:")

@@ -15,12 +15,6 @@ import sys
 import threading
 import traceback
 
-# DPI awareness — makes Tkinter report correct screen dimensions on Windows with scaling
-try:
-    import ctypes
-    ctypes.windll.shcore.SetProcessDpiAwareness(1)
-except Exception:
-    pass
 from pathlib import Path
 
 import pyaudio
@@ -94,13 +88,13 @@ def _update_memory_async(user_text: str, jarvis_text: str) -> None:
         _memory_turn_counter += 1
         current_count = _memory_turn_counter
 
-    if current_count % _MEMORY_EVERY_N_TURNS != 0:
-        return
+        if current_count % _MEMORY_EVERY_N_TURNS != 0:
+            return
 
-    text = user_text.strip()
-    if len(text) < 10 or text == _last_memory_input:
-        return
-    _last_memory_input = text
+        text = user_text.strip()
+        if len(text) < 10 or text == _last_memory_input:
+            return
+        _last_memory_input = text
 
     try:
         from google import genai as _genai
@@ -146,7 +140,7 @@ def _update_memory_async(user_text: str, jarvis_text: str) -> None:
 
 
 # ─────────────────────────────────────────────────────────────
-# TOOL DECLARATIONS — Five Primitives + agent_task + screen_process + open_app
+# TOOL DECLARATIONS — 10 tools: 5 primitives + agent_task + screen_process + open_app + reminder + file_controller
 # ─────────────────────────────────────────────────────────────
 
 TOOL_DECLARATIONS = [
@@ -171,7 +165,8 @@ TOOL_DECLARATIONS = [
                 "action": {
                     "type": "STRING",
                     "description": (
-                        "go_to | construct_url | fetch_html | parse_html | get_text | "
+                        "go_to | construct_url | fetch_html | parse_html | "
+                        "wait_for_content | get_text | "
                         "vision_read | click | type | scroll | press | get_url | "
                         "back | reload | new_tab | close_tab | close"
                     )
@@ -181,8 +176,12 @@ TOOL_DECLARATIONS = [
                     "type": "STRING",
                     "description": (
                         "For construct_url: google | youtube | youtube_by_views | "
-                        "google_flights | google_maps | gmail | google_classroom | "
-                        "classroom_todo | whatsapp | wikipedia | amazon | weather"
+                        "soundcloud | spotify | "
+                        "google_flights | google_maps | google_hotels | google_calendar | "
+                        "gmail | google_classroom | classroom_todo | "
+                        "whatsapp | wikipedia | amazon | weather | "
+                        "booking | airbnb | tripadvisor | "
+                        "reddit | github | twitter"
                     )
                 },
                 "query": {"type": "STRING", "description": "Search query (for construct_url, search)"},
@@ -213,7 +212,11 @@ TOOL_DECLARATIONS = [
                 "direction": {"type": "STRING", "description": "up | down for scroll"},
                 "amount": {"type": "INTEGER", "description": "Scroll amount in pixels"},
                 "key": {"type": "STRING", "description": "Key for press action (e.g. Enter, Tab)"},
-                "limit": {"type": "INTEGER", "description": "Max results for parse_html (default 5)"}
+                "limit": {"type": "INTEGER", "description": "Max results for parse_html (default 5)"},
+                "max_chars": {"type": "INTEGER", "description": "Max characters for get_text (default 6000)"},
+                "timeout_ms": {"type": "INTEGER", "description": "Timeout in ms for wait_for_content (default 5000)"},
+                "checkin": {"type": "STRING", "description": "Check-in date for hotel search (YYYY-MM-DD)"},
+                "checkout": {"type": "STRING", "description": "Check-out date for hotel search (YYYY-MM-DD)"}
             },
             "required": ["action"]
         }
@@ -375,8 +378,8 @@ TOOL_DECLARATIONS = [
         "name": "agent_task",
         "description": (
             "Executes complex multi-step goals that require multiple different tools. "
-            "The planner breaks the goal into steps using the five primitives: "
-            "browser, vision, computer, terminal, os_control. "
+            "The planner breaks the goal into steps using available tools: "
+            "browser, vision, computer, terminal, os_control, open_app, file_controller, reminder. "
             "Use ONLY when the task genuinely requires 2+ sequential steps where "
             "one result feeds into the next. "
             "Examples: 'research X and save to a file', 'find the most viewed YouTube video "
@@ -450,12 +453,64 @@ TOOL_DECLARATIONS = [
         }
     },
 
+    {
+        "name": "reminder",
+        "description": (
+            "Set a timed reminder that triggers a toast notification and sound at the specified date/time. "
+            "Use for: 'remind me to...', 'set a reminder for...', 'alert me at...'. "
+            "Handles scheduling automatically via Windows Task Scheduler. "
+            "ALWAYS call this directly — NEVER use agent_task or terminal for reminders."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "date": {"type": "STRING", "description": "Target date in YYYY-MM-DD format"},
+                "time": {"type": "STRING", "description": "Target time in HH:MM (24-hour) format"},
+                "message": {"type": "STRING", "description": "Reminder text shown in the notification"}
+            },
+            "required": ["date", "time", "message"]
+        }
+    },
+
+    {
+        "name": "file_controller",
+        "description": (
+            "File management operations — list, create, delete, move, copy, rename, "
+            "read, write, find, organize. Handles desktop organization, file search, "
+            "disk usage, and detailed file info. "
+            "Supports path shortcuts: 'desktop', 'downloads', 'documents', 'home'. "
+            "Use for: 'list files on my desktop', 'organize my desktop', "
+            "'find all PDFs in Documents', 'move this file to Downloads', "
+            "'what's taking up space?'. "
+            "ALWAYS call this directly — NEVER use terminal for file operations."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": (
+                        "list | create_file | create_folder | delete | move | copy | "
+                        "rename | read | write | find | largest | disk_usage | "
+                        "organize_desktop | info"
+                    )
+                },
+                "path": {
+                    "type": "STRING",
+                    "description": "Target path or shortcut (desktop, downloads, documents, pictures, music, videos, home)"
+                },
+                "name": {"type": "STRING", "description": "File or folder name"},
+                "content": {"type": "STRING", "description": "Content for create_file or write"},
+                "destination": {"type": "STRING", "description": "Destination path for move/copy"},
+                "new_name": {"type": "STRING", "description": "New name for rename action"},
+                "extension": {"type": "STRING", "description": "File extension filter for find (.pdf, .docx)"},
+                "append": {"type": "BOOLEAN", "description": "Append to file instead of overwrite (for write)"}
+            },
+            "required": ["action"]
+        }
+    },
+
 ]
-
-
-# ─────────────────────────────────────────────────────────────
-# JARVIS LIVE SESSION
-# ─────────────────────────────────────────────────────────────
 
 class JarvisLive:
 
@@ -603,6 +658,20 @@ class JarvisLive:
                     None, lambda: open_app(parameters=args, player=self.ui)
                 )
                 result = r or f"Opened {args.get('app_name')}."
+
+            elif name == "reminder":
+                from actions.reminder import reminder
+                r      = await loop.run_in_executor(
+                    None, lambda: reminder(parameters=args, player=self.ui)
+                )
+                result = r or "Reminder set."
+
+            elif name == "file_controller":
+                from actions.file_controller import file_controller
+                r      = await loop.run_in_executor(
+                    None, lambda: file_controller(parameters=args, player=self.ui)
+                )
+                result = r or "File operation completed."
 
             else:
                 result = f"Unknown tool: {name}"
@@ -1006,10 +1075,12 @@ def main():
         ui.wait_for_api_key()
 
         # Browser selector — shown once, skipped if preference already saved
-        root.after(0, lambda: _show_browser_selector(root))
-        root.update()
+        # Must run on main thread via root.after() since Tkinter isn't thread-safe
+        ready = threading.Event()
+        root.after(0, lambda: (_show_browser_selector(root), ready.set()))
+        ready.wait()
 
-        _attach_text_input(ui, jarvis)
+        root.after(0, lambda: _attach_text_input(ui, jarvis))
         try:
             asyncio.run(jarvis.run())
         except KeyboardInterrupt:

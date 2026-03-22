@@ -86,7 +86,13 @@ def _launch_windows(app_name: str) -> bool:
         pyautogui.PAUSE = 0.1
         pyautogui.press("win")
         time.sleep(0.6)
-        pyautogui.write(app_name, interval=0.05)
+        # Use clipboard paste for Unicode support (pyautogui.write only handles ASCII)
+        try:
+            import pyperclip
+            pyperclip.copy(app_name)
+            pyautogui.hotkey("ctrl", "v")
+        except ImportError:
+            pyautogui.write(app_name, interval=0.05)
         time.sleep(0.8)
         pyautogui.press("enter")
         time.sleep(3.0)

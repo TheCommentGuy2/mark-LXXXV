@@ -38,7 +38,17 @@ def reminder(
             return "That time is already in the past."
 
         task_name    = f"MARKReminder_{target_dt.strftime('%Y%m%d_%H%M')}"
-        safe_message = message.replace('"', '').replace("'", "").strip()[:200]
+        # Sanitize for both Python string literal and XML injection
+        # IMPORTANT: & must be escaped FIRST before < and > to avoid double-escaping
+        safe_message = (message.replace("\\", "\\\\")
+                               .replace('"', '')
+                               .replace("'", "")
+                               .replace("\n", " ")
+                               .replace("\r", "")
+                               .replace("&", "&amp;")
+                               .replace("<", "&lt;")
+                               .replace(">", "&gt;")
+                               .strip()[:200])
 
         python_exe = sys.executable
         if python_exe.lower().endswith("python.exe"):

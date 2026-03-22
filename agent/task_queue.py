@@ -207,6 +207,23 @@ class TaskQueue:
         with self._condition:
             self._condition.notify()
 
+        self._cleanup_completed()
+
+    def _cleanup_completed(self, keep: int = 50) -> None:
+        """Remove old completed/failed/cancelled tasks to prevent memory growth."""
+        with self._lock:
+            terminal_states = {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}
+            finished = [
+                (t.created_at, tid)
+                for tid, t in self._tasks.items()
+                if t.status in terminal_states
+            ]
+            if len(finished) <= keep:
+                return
+            finished.sort()
+            for _, tid in finished[:-keep]:
+                del self._tasks[tid]
+
 _queue        = TaskQueue()
 _queue_started = False
 _queue_lock    = threading.Lock()

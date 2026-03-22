@@ -289,7 +289,12 @@ def _ask_gemini_command(task: str) -> str:
                 cmd = response.text.strip().strip("`").strip()
                 if cmd.startswith("```"):
                     lines = cmd.split("\n")
-                    cmd   = "\n".join(lines[1:-1]).strip()
+                    # Strip language prefix line (```cmd, ```bash, etc.) and closing ```
+                    cmd = "\n".join(lines[1:]).rstrip("`").strip()
+                    # Also strip if the first remaining line is just a language name
+                    first_line = cmd.split("\n")[0].strip().lower()
+                    if first_line in ("cmd", "bash", "sh", "powershell", "ps1", "bat", "shell"):
+                        cmd = "\n".join(cmd.split("\n")[1:]).strip()
                 return cmd
             except Exception as e:
                 if "429" in str(e):
@@ -448,8 +453,7 @@ def terminal(
         if visible is None:
             visible = len(command) > 60
         if visible:
-            _run_visible(command, cwd=cwd)
-            return _run_silent(command, timeout=timeout, cwd=cwd)
+            return _run_visible(command, cwd=cwd)
         return _run_silent(command, timeout=timeout, cwd=cwd)
 
     task_lower = task.lower()
@@ -520,8 +524,7 @@ def terminal(
         if visible is None:
             visible = False
         if visible:
-            _run_visible(hardcoded, cwd=cwd)
-            return _run_silent(hardcoded, timeout=timeout, cwd=cwd)
+            return _run_visible(hardcoded, cwd=cwd)
         return _run_silent(hardcoded, timeout=timeout, cwd=cwd)
 
     # ── File existence check ───────────────────────────────────
@@ -562,6 +565,5 @@ def terminal(
 
     if visible:
         _run_visible(command, cwd=cwd)
-        result = _run_silent(command, timeout=timeout, cwd=cwd)
-        return f"Terminal opened.\n\n{result}"
+        return f"Terminal opened with command: {command[:80]}"
     return _run_silent(command, timeout=timeout, cwd=cwd)

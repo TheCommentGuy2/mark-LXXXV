@@ -90,11 +90,26 @@ def update_memory(memory_update: dict) -> dict:
     if not isinstance(memory_update, dict) or not memory_update:
         return load_memory()
 
-    memory = load_memory()
+    # Single lock across the entire load-modify-save cycle to prevent TOCTOU races
+    with _lock:
+        # Inline load (don't call load_memory() which acquires _lock separately)
+        try:
+            if MEMORY_PATH.exists():
+                data = json.loads(MEMORY_PATH.read_text(encoding="utf-8"))
+                memory = data if isinstance(data, dict) else _empty_memory()
+            else:
+                memory = _empty_memory()
+        except Exception:
+            memory = _empty_memory()
 
-    if _recursive_update(memory, memory_update):
-        save_memory(memory)
-        print(f"[Memory] 💾 Saved: {list(memory_update.keys())}")
+        if _recursive_update(memory, memory_update):
+            # Inline save (don't call save_memory() which acquires _lock separately)
+            MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+            MEMORY_PATH.write_text(
+                json.dumps(memory, indent=2, ensure_ascii=False),
+                encoding="utf-8"
+            )
+            print(f"[Memory] 💾 Saved: {list(memory_update.keys())}")
 
     return memory
 

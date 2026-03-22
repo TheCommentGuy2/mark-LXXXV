@@ -1,0 +1,64 @@
+# ─── API Keys & Config ────────────────────────────────────────
+config/api_keys.json
+config/*.json
+.env
+*.env
+
+# ─── Browser Profile (Playwright temp profiles) ───────────────
+config/browser_profile/
+
+# ─── Memory (contains personal data) ─────────────────────────
+memory/long_term.json
+memory/session_*.json
+memory/*.json
+
+# ─── Python Cache ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# ─── Virtual Environments ─────────────────────────────────────
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+# ─── Playwright Browser Binaries ──────────────────────────────
+# These are large and installed via `playwright install`
+playwright/
+ms-playwright/
+
+# ─── Logs ─────────────────────────────────────────────────────
+*.log
+logs/
+
+# ─── Screenshots / Temp Files ─────────────────────────────────
+jarvis_screenshot.png
+screenshot*.png
+*.tmp
+
+# ─── IDE ──────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# ─── OS ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── Build / Distribution ─────────────────────────────────────
+dist/
+build/
+*.egg-info/
+*.spec
+
+# ─── Jupyter ──────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ─── Face image (optional — remove this line if you want to share it) ───
+# face.png

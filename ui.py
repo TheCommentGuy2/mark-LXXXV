@@ -289,7 +289,7 @@ class JarvisUI:
         c.create_rectangle(0, H - 28, W, H, fill="#00080d", outline="")
         c.create_line(0, H - 28, W, H - 28, fill=C_DIM, width=1)
         c.create_text(W // 2, H - 14, fill=C_DIM, font=("Courier", 8),
-                      text="TheCmomentGuy2 · Original by FatihMakes ·  CLASSIFIED  ·  MARK LXXXV")
+                      text="TheCommentGuy2 · Original by FatihMakes ·  CLASSIFIED  ·  MARK LXXXV")
 
     def write_log(self, text: str):
         self.typing_queue.append(text)

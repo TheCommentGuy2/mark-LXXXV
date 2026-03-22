@@ -248,23 +248,55 @@ def _port_open(port: int) -> bool:
         return False
 
 
+def _kill_browser_process(exe_name: str) -> bool:
+    """
+    Kills all running instances of the browser by executable name.
+    Returns True if any processes were killed.
+
+    This is necessary because Chromium-based browsers are single-instance on
+    Windows — launching a second instance just hands off to the existing one
+    and exits immediately, so --remote-debugging-port never takes effect.
+    Killing first ensures the new launch with the debug port is the only instance.
+    """
+    killed = False
+    try:
+        if _OS == "Windows":
+            result = subprocess.run(
+                ["taskkill", "/f", "/im", exe_name],
+                capture_output=True, text=True
+            )
+            killed = result.returncode == 0
+        else:
+            result = subprocess.run(
+                ["pkill", "-f", exe_name],
+                capture_output=True
+            )
+            killed = result.returncode == 0
+        if killed:
+            print(f"[Browser] 🔴 Closed existing {exe_name} (will reopen with debug port)")
+            time.sleep(1.5)  # let it fully close before relaunching
+    except Exception as e:
+        print(f"[Browser] ⚠️ Could not kill {exe_name}: {e}")
+    return killed
+
+
 def _launch_browser_with_cdp(exe: str, port: int) -> subprocess.Popen:
     """
     Launches the browser with remote debugging enabled.
-    The browser opens using whatever the default profile is — no user-data-dir
-    flag means Chromium uses its own default profile directory, same as when
-    the user opens it normally from the taskbar.
+    No --user-data-dir flag → browser uses its own default profile directory,
+    same as opening it normally from the taskbar. Real cookies, sessions, logins.
     """
-    args = [
-        exe,
-        f"--remote-debugging-port={port}",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-session-crashed-bubble",
-    ]
-    # Firefox uses a different flag
-    if "firefox" in exe.lower():
+    is_firefox = "firefox" in exe.lower()
+    if is_firefox:
         args = [exe, f"--remote-debugging-port={port}", "--new-instance"]
+    else:
+        args = [
+            exe,
+            f"--remote-debugging-port={port}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-session-crashed-bubble",
+        ]
 
     print(f"[Browser] 🚀 Launching with CDP on port {port}: {Path(exe).name}")
     return subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -379,37 +411,43 @@ class _BrowserThread:
         """
         Connect to the user's real browser via CDP.
 
-        Step 1: Try connecting to an already-running browser on CDP_PORT.
-                This works if the browser was previously launched by JARVIS.
-        Step 2: Launch the browser with --remote-debugging-port and wait for
-                it to be ready, then connect.
-        Step 3: If no browser found/configured, fall back to Playwright's
-                built-in Chromium (no real profile but still functional).
+        Step 1: Already running on the debug port? Connect immediately.
+        Step 2: Running WITHOUT the debug port (normal launch from taskbar)?
+                Kill it, relaunch with --remote-debugging-port, then connect.
+                This is required because Chromium is single-instance — a second
+                launch just hands off to the existing process and exits, so the
+                debug port never opens.
+        Step 3: Fallback to Playwright's built-in Chromium if no browser found.
         """
         port = CDP_PORT
 
-        # ── Step 1: already running with debug port? ──
+        # ── Step 1: already running with debug port? ──────────────
         if _port_open(port):
             try:
-                self._browser  = await self._playwright.chromium.connect_over_cdp(
+                self._browser = await self._playwright.chromium.connect_over_cdp(
                     f"http://localhost:{port}"
                 )
-                self._context  = self._browser.contexts[0] if self._browser.contexts \
-                                 else await self._browser.new_context(viewport=None)
-                pages          = self._context.pages
-                self._page     = pages[0] if pages else await self._context.new_page()
+                self._context = (self._browser.contexts[0] if self._browser.contexts
+                                 else await self._browser.new_context(viewport=None))
+                pages         = self._context.pages
+                self._page    = pages[0] if pages else await self._context.new_page()
                 print(f"[Browser] ✅ Connected to existing browser on port {port}")
                 return
             except Exception as e:
                 print(f"[Browser] ⚠️ Existing CDP connection failed: {e}")
 
-        # ── Step 2: launch with debug port ──
+        # ── Step 2: launch with debug port ────────────────────────
         cfg = _resolve_browser()
         if cfg and cfg.get("exe"):
-            exe = cfg["exe"]
+            exe      = cfg["exe"]
+            exe_name = Path(exe).name  # e.g. "brave.exe"
+
+            # Kill any existing instance so our debug-port launch becomes the only one
+            _kill_browser_process(exe_name)
+
             self._proc = _launch_browser_with_cdp(exe, port)
 
-            # Wait for debug port to open
+            # Wait for the debug port to open
             deadline = time.time() + DELAY_CDP_MAX_WAIT
             while time.time() < deadline:
                 await asyncio.sleep(DELAY_CDP_READY)
@@ -420,25 +458,26 @@ class _BrowserThread:
 
             if _port_open(port):
                 try:
-                    self._browser  = await self._playwright.chromium.connect_over_cdp(
+                    self._browser = await self._playwright.chromium.connect_over_cdp(
                         f"http://localhost:{port}"
                     )
-                    self._context  = self._browser.contexts[0] if self._browser.contexts \
-                                     else await self._browser.new_context(viewport=None)
-                    pages          = self._context.pages
-                    self._page     = pages[0] if pages else await self._context.new_page()
-                    display        = cfg.get("display", "Browser")
+                    self._context = (self._browser.contexts[0] if self._browser.contexts
+                                     else await self._browser.new_context(viewport=None))
+                    pages         = self._context.pages
+                    self._page    = pages[0] if pages else await self._context.new_page()
+                    display       = cfg.get("display", "Browser")
                     print(f"[Browser] ✅ {display} launched with real profile via CDP")
                     return
                 except Exception as e:
                     print(f"[Browser] ⚠️ CDP connect after launch failed: {e}")
 
-        # ── Step 3: fallback — Playwright's own Chromium ──
+        # ── Step 3: fallback ──────────────────────────────────────
         print("[Browser] ⚠️ Falling back to built-in Chromium (no real profile)")
-        b              = await self._playwright.chromium.launch(headless=False,
-                                                                args=["--start-maximized"])
-        self._context  = await b.new_context(viewport=None)
-        self._page     = await self._context.new_page()
+        b             = await self._playwright.chromium.launch(
+            headless=False, args=["--start-maximized"]
+        )
+        self._context = await b.new_context(viewport=None)
+        self._page    = await self._context.new_page()
 
     async def _close(self):
         if self._browser:

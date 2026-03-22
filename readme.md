@@ -1,4 +1,4 @@
-# J.A.R.V.I.S — MARK XXX (Refactored)
+# J.A.R.V.I.S — MARK LXXXV
 
 > **Just A Rather Very Intelligent System**  
 > A voice-activated AI desktop assistant powered by the Gemini Live API.
@@ -11,6 +11,17 @@ This project is a fork of **MARK XXX** by [FatihMakes](https://github.com/FatihM
 The original project provided the Gemini Live API voice session architecture, the animated JARVIS UI (`ui.py`), the memory system, the task queue, and the error handler.
 
 This fork refactors the action layer from 15+ specialised tools into five universal primitives, enabling truly autonomous browser and system control rather than scripted task execution.
+
+---
+
+## Installation
+
+```bash
+git clone https://github.com/TheCommentGuy2/mark-LXXXV/
+cd mark-LXXXV
+python setup.py
+python main.py
+```
 
 ---
 
@@ -32,7 +43,7 @@ This fork refactors the action layer from 15+ specialised tools into five univer
 
 ### Tiered reading strategy
 
-Browser tasks now follow a cost hierarchy — always starting at the cheapest approach that works:
+Browser tasks follow a cost hierarchy — always starting at the cheapest approach that works:
 
 - **Tier 0** — No browser. OS controls and terminal tasks are direct calls.
 - **Tier 1** — URL construction. Navigate directly to constructed URLs (Google, YouTube, Flights, Maps, Gmail, Classroom, WhatsApp Web, Wikipedia, Amazon, Reddit, GitHub).
@@ -46,20 +57,9 @@ Browser tasks now follow a cost hierarchy — always starting at the cheapest ap
 - `agent/planner.py` — completely rewritten with 13 worked examples, tiered strategy instructions, 429 rate-limit retry with delay extraction, and keyword fallback that makes zero API calls.
 - `agent/executor.py` — context enrichment (prior step results injected into next step parameters automatically), condition evaluation (conditional steps skip with natural spoken explanation), improved natural summary that includes real data found (prices, times, assignments).
 
-### Browser — real profile via CDP
+### Browser — CDP connection to real browser
 
-The browser now connects to your actual browser using Chrome DevTools Protocol (`connect_over_cdp`). Your real cookies, sessions, and logins are used — WhatsApp Web, Gmail, Google Classroom all work because it's literally your running browser. No profile lock conflicts.
-
-### Fully configurable delays
-
-All timing constants live at the top of `actions/browser.py`:
-
-```python
-DELAY_AFTER_NAVIGATE = 2.0   # wait after page load before reading
-DELAY_CDP_READY      = 0.4   # polling interval while browser starts
-DELAY_CDP_MAX_WAIT   = 15    # max seconds to wait for debug port
-DELAY_CLICK          = 0.5   # pause after a click
-```
+The browser connects to your actual running browser via the Chrome DevTools Protocol. Your real cookies, sessions, and logins are used — WhatsApp Web, Gmail, Google Classroom all work because it's literally your running browser. No profile lock conflicts.
 
 ### Text input bar
 
@@ -81,7 +81,7 @@ A text input bar is available in the JARVIS window (Ctrl+T or the `⌨` button i
 
 ## What JARVIS Can Now Do
 
-Things that were impossible with the original and are in scope now:
+Things that were impossible with the original and are now in scope:
 
 - Navigate to any website and read its content
 - Check Google Classroom for assignments due tomorrow
@@ -93,48 +93,8 @@ Things that were impossible with the original and are in scope now:
 - Check disk usage, RAM, running processes from natural language
 - Set volume, brightness, dark mode, Wi-Fi via system APIs (not GUI clicking)
 - Research a topic across multiple sources and save to a file
-- Get a Google Maps route
+- Get a Google Maps route and travel time
 - Any task on any website — if you can describe it, JARVIS can attempt it
-
----
-
-## Requirements
-
-```
-pip install google-genai pyaudio pillow mss opencv-python pyautogui pyperclip
-pip install playwright beautifulsoup4 psutil wmi pycaw comtypes
-playwright install
-```
-
-> **Note:** `wmi` and `pycaw` are Windows-only. On macOS/Linux those volume/brightness methods fall back to subprocess commands.
-
----
-
-## Setup
-
-1. Clone the repo
-2. Install requirements (see above)
-3. Place your `face.png` in the root directory (or remove the reference in `ui.py`)
-4. Run `python main.py`
-5. Enter your Gemini API key when prompted
-6. Select your browser from the selector dialog that appears on every startup
-7. Talk to JARVIS
-
----
-
-## Configuration
-
-All config is stored in `config/api_keys.json`:
-
-```json
-{
-    "gemini_api_key": "your-key-here",
-    "browser": "brave",
-    "camera_index": 0
-}
-```
-
-`browser` is set via the startup selector dialog. Valid values: `brave`, `chrome`, `edge`, `opera`, `opera_gx`, `vivaldi`, `firefox`.
 
 ---
 
@@ -152,39 +112,19 @@ For read-and-report tasks (check schedule, read emails, find prices), no special
 
 ---
 
-## File Structure
+## Configuration
 
+All config is stored in `config/api_keys.json`:
+
+```json
+{
+    "gemini_api_key": "your-key-here",
+    "browser": "brave",
+    "camera_index": 0
+}
 ```
-├── main.py                      # Gemini Live session, tool declarations, UI setup
-├── ui.py                        # JARVIS animated UI (original, unchanged)
-├── face.png                     # Avatar image
-│
-├── actions/
-│   ├── browser.py               # Browser primitive (CDP + tiered reading)
-│   ├── vision.py                # Vision primitive (screen/camera → Gemini)
-│   ├── computer.py              # Computer control primitive
-│   ├── terminal.py              # Terminal primitive (yt-dlp, ffmpeg, shell)
-│   ├── os_control.py            # OS control (volume, brightness, dark mode, etc.)
-│   ├── screen_processor.py      # Live API voice-activated screen analysis (original)
-│   ├── open_app.py              # App launcher (original)
-│   ├── file_controller.py       # File management (original)
-│   └── reminder.py              # Windows Task Scheduler reminders (original)
-│
-├── agent/
-│   ├── planner.py               # Goal → step plan via Gemini
-│   ├── executor.py              # Step execution with context injection
-│   ├── task_queue.py            # Background task queue (original)
-│   └── error_handler.py         # Error classification and recovery (original)
-│
-├── core/
-│   └── prompt.txt               # JARVIS system prompt (full rewrite)
-│
-├── memory/
-│   └── memory_manager.py        # Long-term memory (original)
-│
-└── config/
-    └── api_keys.json            # API key + browser preference (gitignored)
-```
+
+The API key is entered via the setup dialog on first run. The browser preference is set via the selector dialog that appears on startup. Valid browser values: `brave`, `chrome`, `edge`, `opera`, `opera_gx`, `vivaldi`, `firefox`.
 
 ---
 

@@ -1,8 +1,10 @@
 # main.py
 # JARVIS — Gemini Live API Voice Session
 #
-# Eight tools: browser, vision, computer, terminal, os_control, open_app, file_controller, reminder
-# + agent_task (multi-step planner) + screen_process (voice-activated screen analysis)
+# 10 base tools: browser, vision, computer, terminal, os_control, open_app,
+#                file_controller, reminder, agent_task (planner), screen_process
+# 8 dedicated service tools: soundcloud, youtube, weather, wikipedia,
+#                            gmail, google_classroom, todoist, google_maps
 #
 # Text input bar: attached to existing Tkinter window without modifying ui.py.
 # Thread-safe queue bridges Tkinter main thread ↔ asyncio session thread.
@@ -140,7 +142,8 @@ def _update_memory_async(user_text: str, jarvis_text: str) -> None:
 
 
 # ─────────────────────────────────────────────────────────────
-# TOOL DECLARATIONS — 10 tools: 5 primitives + agent_task + screen_process + open_app + reminder + file_controller
+# TOOL DECLARATIONS — 18 tools: 5 primitives + agent_task + screen_process +
+# open_app + reminder + file_controller + 8 dedicated service modules
 # ─────────────────────────────────────────────────────────────
 
 TOOL_DECLARATIONS = [
@@ -378,17 +381,15 @@ TOOL_DECLARATIONS = [
     {
         "name": "agent_task",
         "description": (
-            "Executes complex multi-step goals that require multiple different tools. "
-            "The planner breaks the goal into steps using available tools: "
-            "browser, vision, computer, terminal, os_control, open_app, file_controller, reminder. "
-            "Use ONLY when the task genuinely requires 2+ sequential steps where "
-            "one result feeds into the next. "
-            "Examples: 'research X and save to a file', 'find the most viewed YouTube video "
-            "and download it', 'check Gmail for unread emails and reply', "
-            "'convert all .mp4 files in Downloads to MP3', "
-            "'check Google Classroom for tomorrow's assignments'. "
-            "DO NOT use for: single OS controls, single terminal commands, "
-            "single browser navigations. Call those tools directly."
+            "Fallback for complex multi-step goals NOT covered by dedicated service tools. "
+            "Do NOT use for: SoundCloud (use soundcloud), YouTube (use youtube), "
+            "weather (use weather), Wikipedia (use wikipedia), Gmail (use gmail), "
+            "Google Classroom (use google_classroom), Todoist (use todoist), "
+            "Google Maps (use google_maps). "
+            "Use agent_task ONLY when the task genuinely requires 2+ sequential steps "
+            "across multiple different tools where one result feeds the next. "
+            "Examples: 'research X and save to a file', 'find the most viewed video "
+            "and download it', 'convert all .mp4 files to MP3'."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -508,6 +509,143 @@ TOOL_DECLARATIONS = [
                 "append": {"type": "BOOLEAN", "description": "Append to file instead of overwrite (for write)"}
             },
             "required": ["action"]
+        }
+    },
+
+    # ── Dedicated service modules ─────────────────────────────
+
+    {
+        "name": "soundcloud",
+        "description": (
+            "Play music on SoundCloud. Use when user asks to play, search, or find "
+            "a song or artist on SoundCloud. Handles search, track selection, and playback automatically."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "query": {"type": "STRING", "description": "Song, artist, or genre to search for"}
+            },
+            "required": ["query"]
+        }
+    },
+
+    {
+        "name": "youtube",
+        "description": (
+            "Play videos or music on YouTube. Use when user asks to play, search, or find "
+            "something on YouTube. Handles search, video selection, and playback automatically."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "query": {"type": "STRING", "description": "Video, song, or topic to search for"},
+                "sort_by_views": {
+                    "type": "BOOLEAN",
+                    "description": "Sort results by view count (for 'most viewed' requests)"
+                }
+            },
+            "required": ["query"]
+        }
+    },
+
+    {
+        "name": "weather",
+        "description": (
+            "Get current weather for a city. Use when user asks about weather, temperature, "
+            "or forecast for any location."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "city": {"type": "STRING", "description": "City or location name"}
+            },
+            "required": ["city"]
+        }
+    },
+
+    {
+        "name": "wikipedia",
+        "description": (
+            "Look up a topic on Wikipedia. Use when user asks about a topic, wants to learn "
+            "about something, or asks 'what is X'. Returns article content."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "topic": {"type": "STRING", "description": "Topic to look up"}
+            },
+            "required": ["topic"]
+        }
+    },
+
+    {
+        "name": "gmail",
+        "description": (
+            "Check Gmail inbox. Use when user asks to check email, read inbox, "
+            "or look for unread messages. Detects sign-in barriers automatically."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": "check_inbox (default)"
+                }
+            },
+            "required": []
+        }
+    },
+
+    {
+        "name": "google_classroom",
+        "description": (
+            "Check Google Classroom assignments. Use when user asks about homework, "
+            "assignments, what's due, or anything related to Google Classroom."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": "check_assignments (default) | check_todo"
+                }
+            },
+            "required": []
+        }
+    },
+
+    {
+        "name": "todoist",
+        "description": (
+            "Check Todoist tasks. Use when user asks about their tasks, to-do list, "
+            "what they need to do today, or upcoming tasks on Todoist."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "view": {
+                    "type": "STRING",
+                    "description": "today (default) | upcoming | inbox"
+                }
+            },
+            "required": []
+        }
+    },
+
+    {
+        "name": "google_maps",
+        "description": (
+            "Get directions or search locations on Google Maps. Use when user asks for "
+            "directions, routes, how to get somewhere, or searches for a place."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "origin": {"type": "STRING", "description": "Starting location"},
+                "destination": {"type": "STRING", "description": "Destination location"},
+                "query": {"type": "STRING", "description": "Place to search for (if not directions)"}
+            },
+            "required": []
         }
     },
 
@@ -673,6 +811,62 @@ class JarvisLive:
                     None, lambda: file_controller(parameters=args, player=self.ui)
                 )
                 result = r or "File operation completed."
+
+            elif name == "soundcloud":
+                from actions.soundcloud import soundcloud
+                r      = await loop.run_in_executor(
+                    None, lambda: soundcloud(parameters=args, player=self.ui)
+                )
+                result = r or "SoundCloud action completed."
+
+            elif name == "youtube":
+                from actions.youtube import youtube
+                r      = await loop.run_in_executor(
+                    None, lambda: youtube(parameters=args, player=self.ui)
+                )
+                result = r or "YouTube action completed."
+
+            elif name == "weather":
+                from actions.weather import weather
+                r      = await loop.run_in_executor(
+                    None, lambda: weather(parameters=args, player=self.ui)
+                )
+                result = r or "Weather check completed."
+
+            elif name == "wikipedia":
+                from actions.wikipedia import wikipedia
+                r      = await loop.run_in_executor(
+                    None, lambda: wikipedia(parameters=args, player=self.ui)
+                )
+                result = r or "Wikipedia lookup completed."
+
+            elif name == "gmail":
+                from actions.gmail import gmail
+                r      = await loop.run_in_executor(
+                    None, lambda: gmail(parameters=args, player=self.ui)
+                )
+                result = r or "Gmail check completed."
+
+            elif name == "google_classroom":
+                from actions.google_classroom import google_classroom
+                r      = await loop.run_in_executor(
+                    None, lambda: google_classroom(parameters=args, player=self.ui)
+                )
+                result = r or "Classroom check completed."
+
+            elif name == "todoist":
+                from actions.todoist import todoist
+                r      = await loop.run_in_executor(
+                    None, lambda: todoist(parameters=args, player=self.ui)
+                )
+                result = r or "Todoist check completed."
+
+            elif name == "google_maps":
+                from actions.google_maps import google_maps
+                r      = await loop.run_in_executor(
+                    None, lambda: google_maps(parameters=args, player=self.ui)
+                )
+                result = r or "Maps action completed."
 
             else:
                 result = f"Unknown tool: {name}"

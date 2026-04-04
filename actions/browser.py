@@ -175,6 +175,42 @@ def _find_exe(name: str) -> Path | None:
     return None
 
 
+_PROFILE_DIRS = {
+    "brave":   "BraveSoftware/Brave-Browser/User Data",
+    "chrome":  "Google/Chrome/User Data",
+    "edge":    "Microsoft/Edge/User Data",
+    "opera":   "Opera Software/Opera Stable",
+    "opera_gx":"Opera Software/Opera GX Stable",
+    "vivaldi": "Vivaldi/User Data",
+}
+
+
+def _get_profile_dir(browser_name: str) -> Path | None:
+    """Returns the user-data-dir for the given Chromium browser, or None."""
+    rel = _PROFILE_DIRS.get(browser_name)
+    if not rel:
+        return None
+    if _OS == "Windows":
+        import os
+        local = os.environ.get("LOCALAPPDATA", "")
+        appdata = os.environ.get("APPDATA", "")
+        # Opera stores in %APPDATA%, others in %LOCALAPPDATA%
+        base = appdata if "Opera" in rel else local
+        if base:
+            p = Path(base) / rel
+            if p.exists():
+                return p
+    elif _OS == "Darwin":
+        p = Path.home() / "Library/Application Support" / rel
+        if p.exists():
+            return p
+    elif _OS == "Linux":
+        p = Path.home() / ".config" / rel
+        if p.exists():
+            return p
+    return None
+
+
 def detect_installed_browsers() -> list[dict]:
     """Returns list of browsers found on this machine."""
     results = []
@@ -273,7 +309,7 @@ def _kill_browser_process(exe_name: str) -> bool:
     return killed
 
 
-def _launch_browser_with_cdp(exe: str, port: int) -> subprocess.Popen:
+def _launch_browser_with_cdp(exe: str, port: int, profile_dir: Path | None = None) -> subprocess.Popen:
     is_firefox = "firefox" in exe.lower()
     if is_firefox:
         args = [exe, f"--remote-debugging-port={port}", "--new-instance"]
@@ -286,6 +322,8 @@ def _launch_browser_with_cdp(exe: str, port: int) -> subprocess.Popen:
             "--no-default-browser-check",
             "--disable-session-crashed-bubble",
         ]
+        if profile_dir:
+            args.append(f"--user-data-dir={profile_dir}")
 
     print(f"[Browser] 🚀 Launching with CDP on port {port}: {Path(exe).name}")
     
@@ -464,7 +502,8 @@ class _BrowserThread:
             exe_name = Path(exe).name
 
             _kill_browser_process(exe_name)
-            self._proc = _launch_browser_with_cdp(exe, port)
+            profile_dir = _get_profile_dir(cfg.get("name", ""))
+            self._proc = _launch_browser_with_cdp(exe, port, profile_dir)
 
             deadline = time.time() + DELAY_CDP_MAX_WAIT
             while time.time() < deadline:
@@ -888,6 +927,41 @@ def _ensure_started():
         if not _bt_started:
             _bt.start()
             _bt_started = True
+
+
+# ─────────────────────────────────────────────────────────────
+# PUBLIC API — used by service modules (actions/soundcloud.py, etc.)
+# ─────────────────────────────────────────────────────────────
+
+def go_to(url: str) -> str:
+    _ensure_started()
+    return _bt.run(_bt._go_to(url), timeout=35)
+
+def wait_for_content(timeout_ms: int = 5000) -> str:
+    _ensure_started()
+    return _bt.run(_bt._wait_for_content(timeout_ms), timeout=10)
+
+def parse_html(selector: str = "", known_key: str = "",
+               attribute: str = "href", limit: int = 5) -> str:
+    _ensure_started()
+    return _bt.run(_bt._parse_html(selector, known_key, attribute, limit), timeout=20)
+
+def get_text(max_chars: int = 6000) -> str:
+    _ensure_started()
+    return _bt.run(_bt._get_text(max_chars), timeout=20)
+
+def vision_read(question: str) -> str:
+    _ensure_started()
+    return _bt.run(_bt._vision_read(question), timeout=30)
+
+def get_url() -> str:
+    _ensure_started()
+    return _bt.run(_bt._get_url(), timeout=10)
+
+def click_element(selector: str = "", text: str = "",
+                  description: str = "") -> str:
+    _ensure_started()
+    return _bt.run(_bt._click_element(selector, text, description), timeout=15)
 
 
 # ─────────────────────────────────────────────────────────────

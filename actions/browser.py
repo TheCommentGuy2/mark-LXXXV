@@ -252,20 +252,22 @@ def _kill_browser_process(exe_name: str) -> bool:
     killed = False
     try:
         if _OS == "Windows":
+            # Added /t to force kill all related background child processes
             result = subprocess.run(
-                ["taskkill", "/f", "/im", exe_name],
+                ["taskkill", "/f", "/im", exe_name, "/t"],
                 capture_output=True, text=True
             )
             killed = result.returncode == 0
         else:
+            # Added -9 for hard kill on Unix/Mac
             result = subprocess.run(
-                ["pkill", "-f", exe_name],
+                ["pkill", "-9", "-f", exe_name],
                 capture_output=True
             )
             killed = result.returncode == 0
         if killed:
-            print(f"[Browser] 🔴 Closed existing {exe_name} (will reopen with debug port)")
-            time.sleep(1.5)
+            print(f"[Browser] 🔴 Restarted {exe_name} to enable automation (tabs will be restored)")
+            time.sleep(2.0)
     except Exception as e:
         print(f"[Browser] ⚠️ Could not kill {exe_name}: {e}")
     return killed
@@ -279,14 +281,21 @@ def _launch_browser_with_cdp(exe: str, port: int) -> subprocess.Popen:
         args = [
             exe,
             f"--remote-debugging-port={port}",
+            "--restore-last-session",  # Restores all your tabs so you don't lose your place
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-session-crashed-bubble",
         ]
 
     print(f"[Browser] 🚀 Launching with CDP on port {port}: {Path(exe).name}")
-    return subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
+    
+    kwargs = {}
+    if _OS == "Windows":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+        
+    return subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kwargs)
 
 # ─────────────────────────────────────────────────────────────
 # KNOWN SELECTORS — Tier 2 (used as hints for JS evaluation)
@@ -328,7 +337,7 @@ def construct_url(service: str, **kwargs) -> str:
         "youtube_search":   f"https://www.youtube.com/results?search_query={q_enc}",
         "youtube_by_views": f"https://www.youtube.com/results?search_query={q_enc}&sp=CAM%3D",
         "youtube_views":    f"https://www.youtube.com/results?search_query={q_enc}&sp=CAM%3D",
-        "soundcloud":       f"https://soundcloud.com/search?q={q_enc}",
+        "   oud":       f"https://soundcloud.com/search?q={q_enc}",
         "soundcloud_search":f"https://soundcloud.com/search?q={q_enc}",
         "spotify":          f"https://open.spotify.com/search/{q_enc}",
         # Travel / booking
@@ -441,8 +450,9 @@ class _BrowserThread:
                 )
                 self._context = (self._browser.contexts[0] if self._browser.contexts
                                  else await self._browser.new_context(viewport=None))
-                pages         = self._context.pages
-                self._page    = pages[0] if pages else await self._context.new_page()
+                
+                # ALWAYS open a fresh tab for Jarvis so we don't hijack your active tab
+                self._page = await self._context.new_page()
                 print(f"[Browser] ✅ Connected to existing browser on port {port}")
                 return
             except Exception as e:
@@ -471,15 +481,19 @@ class _BrowserThread:
                     )
                     self._context = (self._browser.contexts[0] if self._browser.contexts
                                      else await self._browser.new_context(viewport=None))
-                    pages         = self._context.pages
-                    self._page    = pages[0] if pages else await self._context.new_page()
-                    display       = cfg.get("display", "Browser")
+                    
+                    # ALWAYS open a fresh tab for Jarvis
+                    self._page = await self._context.new_page()
+                    display    = cfg.get("display", "Browser")
                     print(f"[Browser] ✅ {display} launched with real profile via CDP")
                     return
                 except Exception as e:
                     print(f"[Browser] ⚠️ CDP connect after launch failed: {e}")
 
-        print("[Browser] ⚠️ Falling back to built-in Chromium (no real profile)")
+        print("\n[Browser] ⚠️ FALLBACK: Could not restart your main browser with automation.")
+        print("[Browser] ⚠️ Using built-in Chromium (BLANK PROFILE - NO PASSWORDS).")
+        print("[Browser] 💡 Close your browser manually before starting to avoid this.\n")
+        
         b             = await self._playwright.chromium.launch(
             headless=False, args=["--start-maximized"]
         )
@@ -495,12 +509,9 @@ class _BrowserThread:
             self._browser  = None
             self._context  = None
             self._page     = None
-        if self._proc:
-            try:
-                self._proc.terminate()
-            except Exception:
-                pass
-            self._proc = None
+            
+        # DO NOT terminate self._proc here so the user's main browser stays open!
+        self._proc = None
 
     # ── Navigation ──────────────────────────────────────────
 
